@@ -1,0 +1,28 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Id": "io.github.kylelee.ai-usagebar-omarchy",
+        "Name": "AI Usage Bar",
+        "Description": "AI plan usage in the Plasma panel",
+        "Icon": "utilities-system-monitor",
+        "Category": "System Information",
+        "License": "MIT",
+        "Version": "0.1.0",
+        "Authors": [
+            {
+                "Name": "KyleLee"
+            },
+            {
+                "Name": "Anrry Petrin",
+                "Email": "anrry.petrin@hotmail.com"
+            }
+        ],
+        "Website": "https://github.com/KyleLee/ai-usagebar-omarchy",
+        "BugReportUrl": "https://github.com/KyleLee/ai-usagebar-omarchy/issues",
+        "EnabledByDefault": true,
+        "FormFactors": [
+            "desktop"
+        ]
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

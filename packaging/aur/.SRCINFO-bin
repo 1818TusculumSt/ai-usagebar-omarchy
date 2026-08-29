@@ -1,0 +1,26 @@
+pkgbase = ai-usagebar-omarchy-bin
+	pkgdesc = Omarchy/Waybar widgets + TUI for AI plan usage (prebuilt binary)
+	pkgver = 1.8.0
+	pkgrel = 1
+	url = https://github.com/KyleLee/ai-usagebar-omarchy
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	depends = gcc-libs
+	optdepends = waybar: status bar that hosts the widget
+	optdepends = libnotify: desktop notifications on hard auth failures
+	provides = ai-usagebar-omarchy=1.8.0
+	provides = ai-usagebar=1.8.0
+	provides = ai-usagebar-bin=1.8.0
+	conflicts = ai-usagebar-omarchy
+	conflicts = ai-usagebar-omarchy-debug
+	conflicts = ai-usagebar
+	conflicts = ai-usagebar-bin
+	options = !strip
+	options = !debug
+	source_x86_64 = ai-usagebar-omarchy-1.8.0-x86_64.tar.gz::https://github.com/KyleLee/ai-usagebar-omarchy/releases/download/v1.8.0/ai-usagebar-omarchy-linux-x86_64.tar.gz
+	sha256sums_x86_64 = SKIP
+	source_aarch64 = ai-usagebar-omarchy-1.8.0-aarch64.tar.gz::https://github.com/KyleLee/ai-usagebar-omarchy/releases/download/v1.8.0/ai-usagebar-omarchy-linux-aarch64.tar.gz
+	sha256sums_aarch64 = SKIP
+
+pkgname = ai-usagebar-omarchy-bin

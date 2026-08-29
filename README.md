@@ -1,0 +1,640 @@
+# ai-usagebar
+
+English | [简体中文](README.zh-CN.md)
+
+Native Omarchy Quattro panel, Waybar widget, and tabbed TUI for AI plan usage across **Claude**, **Codex/ChatGPT**, **Z.AI (GLM)**, **OpenRouter**, **DeepSeek**, **Kimi**, **Nous Research**, **OpenCode Go**, and other supported AI coding services.
+
+ai-usagebar began as a Rust port of
+[`claudebar`](https://github.com/mryll/claudebar) and remains drop-in
+compatible. It keeps claudebar's Pango tooltip, Omarchy theme detection, and
+flock-protected OAuth refresh while adding more providers and a testable Rust
+codebase.
+
+![Native Omarchy Quattro panel showing multiple AI quote usage, reset countdowns, and provider tabs](screenshots/omarchy-quattro-panel.png)
+
+## Features
+
+- **Z.AI / BigModel enterprise (team) subscription keys**: the same monitor
+  endpoint with `?type=2` plus organization/project headers — configure the
+  billing type per key and the site (z.ai / bigmodel.cn) is auto-detected
+  from it. Pay-as-you-go keys degrade to 7-day usage stats automatically.
+- **Multi-account for Z.AI and Kimi** (`[[zai.accounts]]` /
+  `[[kimi.accounts]]`): every key gets its own tile on the bar, its own TUI
+  tab, and an isolated cache — manage them in the native settings form
+  (add / rename / delete, per-card Apply) or in `config.toml`.
+- **Custom display names**: each named account tags its bar tile with the
+  name you choose (`kimi-main 42%·2h 15%·2d`) — no name shows the provider
+  (`kimi 37%·2d`). The name is also the `--account <label>` selector.
+- **Per-account range colors on the bar**: every tile carries its own color
+  by remaining quota — green ≥50%, yellow <50%, orange <10%, red <5% — with
+  the 5h and weekly windows side by side, each with its own reset countdown
+  (`42%·2h 15%·2d`, `0%·-` for windows not started yet).
+- Per-provider Waybar modules use the same JSON shape and flags as claudebar.
+- The native Omarchy Quattro plugin follows the shell theme and supports
+  keyboard navigation, provider switching, live reset timers, and stale/error
+  states.
+- `ai-usagebar-omarchy-tui` opens with a compact provider overview and refreshes every
+  60 seconds. Its navigation can use a sidebar, navbar, or no vendor box.
+- An optional Claude Code context view reads recent local session usage without
+  scanning entire histories.
+- The native Omarchy Quattro plugin is the primary frontend.
+- One bar item tiles every enabled account at once (`--vendor all` for
+  Waybar; the Omarchy bar does it natively). `[ui] primary` controls the
+  initial provider in the widget and TUI.
+- Atomic caches and file locking prevent duplicate requests from multi-monitor
+  Waybar setups.
+- Network failures keep the previous data visible; HTTP errors appear in the
+  tooltip.
+- `--pretty`, `--watch N`, and `make smoke` help with local testing and API
+  response changes.
+
+## Reference guides
+
+- [Configuration](docs/configuration.md)
+- [Claude accounts](docs/claude-accounts.md)
+- [Format placeholders](docs/format-placeholders.md)
+- [Provider endpoints and live tests](docs/vendor-endpoints.md)
+
+## Install (Omarchy)
+
+**Two steps:**
+
+```bash
+# 1. install the CLI binaries from source
+cargo install --git https://github.com/KyleLee/ai-usagebar-omarchy
+
+# 2. install the plugin
+omarchy plugin add https://github.com/KyleLee/ai-usagebar-omarchy.git --enable
+```
+
+No Rust yet? Install it from <https://rustup.rs> first — `cargo install`
+builds both `ai-usagebar-omarchy` and `ai-usagebar-omarchy-tui` into
+`~/.cargo/bin` (make sure that directory is on your session PATH so the
+Omarchy shell can find the binary). Update later by re-running the same
+command with `--force`.
+
+Optionally hide the stock Agents widget to avoid duplicates:
+
+```bash
+omarchy plugin disable omarchy.agents
+```
+
+That's it — the bar immediately tiles every configured account (right-click
+launches the TUI; cargo installed it too). Nothing configured yet? Click the
+bar icon → gear (`s`) → **ACCOUNTS** → **Add account** → pick the provider
+(Z.AI / Kimi) → paste the API key (the name is pre-filled, editable) →
+**Apply**. Z.AI team keys also select the `team` billing type and paste the
+two organization ids; the site (z.ai / bigmodel.cn) is auto-detected from
+the type.
+
+Left-click the widget opens the native Quattro panel; middle-click / wheel
+switches providers. The first run also drops a fully commented template at
+`~/.config/ai-usagebar-omarchy/config.toml` (mode 0600, never rewritten) —
+editing it and the settings form are interchangeable.
+
+Update/remove the plugin with `omarchy plugin update ai-usagebar-omarchy` /
+`omarchy plugin remove ai-usagebar-omarchy`.
+
+## Authentication
+
+Claude and Codex reuse OAuth credentials from their official CLIs. Other
+providers use API keys, an existing app login, or a local service. API keys can
+come from environment variables or `config.toml`.
+
+| Vendor | Method | Action required |
+|---|---|---|
+| Claude | OAuth from `~/.claude/.credentials.json` or the macOS login Keychain | Run `claude` once. Tokens refresh automatically. |
+| Anthropic API | Organization Admin key | Opt in with `ANTHROPIC_ADMIN_KEY` or `[anthropic_api] api_key`. Inference and Claude Code keys do not work. |
+| Codex | OAuth, read from `~/.codex/auth.json` | Run `codex login` once. Token auto-refreshes. |
+| Z.AI | API key (`ZAI_API_KEY` env or `[zai] api_key` in config) | Set either. Team/enterprise coding-plan keys work too: set `account_type = "team"` with `organization_id` + `project_id` (see the [configuration reference](docs/configuration.md#zai--bigmodel-account-types)). Multiple keys via `[[zai.accounts]]`. |
+| OpenRouter | API key (`OPENROUTER_API_KEY` env or `[openrouter] api_key` in config) | Set either. Named keys are supported. |
+| DeepSeek | API key (`DEEPSEEK_API_KEY` or config) | Set either and opt in. |
+| Kimi | Existing Kimi Code CLI login **or** API key (`KIMI_API_KEY` or config) | Opt in, then either log in with `kimi` (nothing to paste) or set an API key, which wins when present. A Kimi For Coding subscription can issue one at kimi.com/code/console. Extra subscriptions via `[[kimi.accounts]]`. |
+| Kilo | API key (`KILO_API_KEY` env or `[kilo] api_key` in config) | Set either. Opt-in. For a team balance, also set `[kilo] organization_id`; omit it for the personal balance. |
+| Novita | API key (`NOVITA_API_KEY` env or `[novita] api_key` in config) | Set either. Opt-in. |
+| Moonshot | API key (`MOONSHOT_API_KEY` or config) | Opt in. Set region `cn` for CNY; `global` uses USD. |
+| Grok (xAI) | Management key | Opt in with `XAI_MANAGEMENT_KEY` or config. An inference key does not work. |
+| SuperGrok | Official Grok Build ACP extension | Opt in, install Grok Build, and run `grok login`. This reports subscription usage, not the Management API balance. |
+| MiniMax | Token Plan subscription key | Opt in with `MINIMAX_API_KEY` or config. Choose the matching global or China region; pay-as-you-go keys do not work. |
+| Google Antigravity | Local Antigravity server | Opt in and keep Antigravity or an interactive `agy` session running. |
+| Cursor | Existing Cursor IDE or `cursor-agent` login | Opt in and sign in once. `cursor-agent` is the headless fallback. |
+| Kiro CLI | Existing kiro-cli login | Opt in and run `kiro-cli login` once. ai-usagebar-omarchy refreshes the session when needed. |
+| Nous Research | OAuth device flow | Enable `[nous]`, click **Log in with Nous Research** in the Omarchy settings panel, or run `ai-usagebar-omarchy auth nous login`. Credentials are kept in ai-usagebar's separate platform config directory (`~/.config/ai-usagebar-omarchy/credentials.json` on Linux). |
+| OpenCode Go | API key (`OPENCODE_GO_API_KEY` env or `[opencode-go] api_key` in config) | Enable `[opencode-go]`, then enter the key in the Omarchy settings panel or set the environment variable. |
+
+### Nous credits and OpenCode Go
+
+Nous usage percentage is calculated from the subscription-credit pool only:
+`(monthly subscription credits - subscription credits remaining) / monthly subscription credits`.
+Top-up/purchased credits are not mixed into that percentage. When the Portal
+reports them, the tooltip and TUI show subscription credits, top-up credits, and
+total usable credits as separate values.
+
+Nous login is interactive because the device code is authorized in the browser.
+Leave the terminal open until it reports that login completed, then refresh the
+Omarchy panel. The login never reads Hermes Agent credentials. On Unix, newly
+created credential directories use mode `0700`, and credential and lock files
+use mode `0600`; an existing current-user-owned config directory also works when
+it is not group- or world-writable. Windows uses the user's platform config
+directory and inherited per-user access controls.
+
+OpenCode Go uses the official usage endpoint and the `percent` field. Its key can
+be entered through the native Settings panel; stored values are sent to the Rust
+settings command over stdin and are never placed in QML command arguments. Cache
+entries are tied to the endpoint and a one-way key fingerprint, so changing
+accounts cannot reuse another account's fresh or stale usage.
+
+#### Grok: team-scoped vs organization-scoped keys
+
+The balance lives at `/v1/billing/teams/{team}/prepaid/balance`, so a team has to
+be identified. With a **team-scoped** management key the team is read
+automatically from the key. An **organization-scoped** key cannot provide it
+because that key's `scopeId` is an organization id rather than a team. Set the
+team explicitly in that case:
+
+```toml
+[grok]
+team_id = "your-team-id"
+```
+
+Without it, an organization-scoped key reports an error saying exactly this
+rather than silently querying the wrong URL.
+
+### Enabling a vendor
+
+`enabled = true` is what makes a vendor fetch. Anthropic API, DeepSeek, Kimi,
+Kilo, Novita, Moonshot, Grok, SuperGrok, Antigravity, Cursor, MiniMax, and Kiro CLI all default to **disabled** so that existing
+installs are unaffected until you opt in. Use either method:
+
+- Use the gear or `s` in the Omarchy panel, or run
+  `ai-usagebar-omarchy-tui` and press `s`. Saving a non-empty API key sets that vendor's
+  `enabled = true` for you. Clearing it removes the inline key from
+  `config.toml`.
+- Add `enabled = true` to the vendor's config section alongside the key.
+
+The primary-vendor selector only offers vendors that are currently enabled, so a
+vendor you haven't opted into cannot be set as primary.
+
+Vendors that authenticate through a local login rather than a key — Cursor,
+Kiro CLI, SuperGrok, Antigravity, and Kimi when you have a Kimi For Coding
+subscription — have no key to save, so enable them with `enabled = true` in
+`config.toml`.
+
+### Credential resolution order (for API-key vendors)
+
+For each API-key vendor, ai-usagebar checks in this order:
+
+1. A non-empty environment variable named by `api_key_env`.
+2. An inline `api_key` in the same config section.
+3. An error that names both missing options.
+
+### Security
+
+- Inline keys belong in `~/.config/ai-usagebar-omarchy/config.toml` at mode `600`.
+  Redact them before committing that file to dotfiles. Environment variables
+  remain the default and avoid storing keys in the config.
+- Claude and Codex credentials stay in files managed by their official CLIs.
+- SuperGrok credentials stay inside Grok Build. ai-usagebar receives a
+  credential-free billing result and hashes auth/config files only to separate
+  caches between logins.
+- Cursor's `state.vscdb` and `cursor-agent` fallback `auth.json` are read-only.
+- kiro-cli's `data.sqlite3` is read-only. Refreshed credentials go to an
+  account-scoped `kiro/oauth.json` file, mode `600` on Unix.
+
+#### macOS: Claude credentials in the Keychain
+
+Recent Claude Code builds store OAuth credentials in the macOS login Keychain
+instead of `~/.claude/.credentials.json`. No setup is needed: ai-usagebar uses
+macOS's `security` tool to read and refresh the `Claude Code-credentials` item.
+
+- The default account still uses an existing credentials file when one is
+  present.
+- Each scoped `CLAUDE_CONFIG_DIR` login gets its own
+  `Claude Code-credentials-<hash>` Keychain item.
+- Named accounts use the scoped Keychain item on macOS and fall back to their
+  credentials file on Linux.
+
+## Configuration
+
+The optional config file is `~/.config/ai-usagebar-omarchy/config.toml`.
+Claude, Codex, Z.AI, and OpenRouter are enabled by default; other providers
+are opt-in.
+
+Upgrading from the pre-rename layout (`~/.config/ai-usagebar/`)? The first
+run moves the whole directory — config, credentials, accounts — to the new
+name (a mode-preserving copy when a rename is impossible; nothing is
+deleted), so this fork and the upstream `ai-usagebar-omarchy` it forked from stop
+sharing state. A config that could not be migrated is still read in place.
+
+**No setup needed to start**: the first run (widget, TUI, `usage`, or the
+Omarchy panel's refresh) drops a fully commented template at that path —
+every section and field explained inline, mode 0600, nothing enabled beyond
+the defaults — so configuring is filling in the blanks. It is never
+rewritten once it exists.
+
+A minimal example:
+
+```toml
+[ui]
+primary = "openai"
+
+[kimi]
+enabled = true
+# api_key = "..."  # or set KIMI_API_KEY
+```
+
+See the [configuration reference](docs/configuration.md) for every provider,
+display option, account path, region, and API-key setting.
+
+## Quick start
+
+```bash
+# Local testing — auto-detects TTY and renders human-readable output.
+ai-usagebar                        # uses [ui] primary (defaults to anthropic)
+ai-usagebar --vendor anthropic_api
+ai-usagebar --vendor openai
+ai-usagebar --vendor zai
+ai-usagebar --vendor openrouter
+ai-usagebar --vendor deepseek
+ai-usagebar --vendor kimi
+ai-usagebar --vendor kiro
+
+# Force Waybar JSON (e.g. piping into jq).
+ai-usagebar --json
+
+# Everything at once: quota + time-to-reset for every configured vendor,
+# with one entry per named Claude account.
+ai-usagebar-omarchy usage
+ai-usagebar-omarchy usage --json | jq '.entries[] | {id, metrics, sections}'
+
+# Tile every enabled vendor AND account in one bar module — one compact
+# tile per account (team 42% │ kmi 18% │ cld 5%), hover for the combined
+# report. The taskbar equivalent of the GNOME panel's multi-key layout.
+ai-usagebar --vendor all
+
+# Live preview while iterating on --format / --tooltip-format.
+ai-usagebar --vendor openrouter --watch 5
+
+# Interactive TUI with tabs.
+ai-usagebar-tui
+```
+
+The JSON report has two views of each provider:
+
+- `metrics` contains percentage gauges only.
+- `sections` preserves the complete ordered display, including balances,
+  grouped rows, and spacers. Rows without a percentage do not invent one.
+
+The report also includes the configured `primary` id. Each entry has
+`display_name`, `short_name`, `status`, `stale`, and `fetched_at`; metric rows
+may add `severity` and an absolute `reset_at`. These fields are additive, so
+existing consumers remain compatible. `short_name` is the same three-letter
+code `{vendor_short}` prints, so a frontend that wants a compact provider tag
+takes it from the report instead of keeping its own table.
+
+## Standalone TUI
+
+`ai-usagebar-omarchy-tui` ships with the same `cargo install` the bar uses
+(and lands in the same `~/.cargo/bin`):
+
+```bash
+cargo install --git https://github.com/KyleLee/ai-usagebar-omarchy
+```
+
+No Rust yet? Install it from <https://rustup.rs> first.
+
+The TUI does not depend on Waybar. Run it directly in a local terminal,
+over SSH, or in a tmux pane:
+
+```bash
+ai-usagebar-omarchy-tui               # opens in your current terminal
+```
+
+It works in Kitty, Alacritty, Foot, Ghostty, and other terminal emulators. The
+controls and Settings overlay are the same everywhere; no compositor or window
+manager integration is required.
+
+## Native desktop integration
+
+The [Omarchy Quattro plugin](omarchy/README.md) is the primary frontend:
+bar tiles per account with per-account range colors, the native settings
+form, live reset countdowns, and stale/error states — see its README for
+controls and settings details.
+
+## Waybar config
+
+### Single module, scroll-to-cycle (recommended)
+
+Use one bar item and scroll through your vendors. The TUI on-click still shows them all:
+
+```jsonc
+"modules-right": ["custom/aibar", ...],
+
+"custom/aibar": {
+    "exec": "ai-usagebar --format '{vendor_short} {session_pct}% · {session_reset}'",
+    "return-type": "json",
+    "interval": 300,
+    "signal": 13,
+    "tooltip": true,
+    "on-click": "ai-usagebar-tui",
+    "on-scroll-up":   "ai-usagebar --cycle-next",
+    "on-scroll-down": "ai-usagebar --cycle-prev"
+}
+```
+
+`{vendor_short}` identifies the active provider with a three-letter code. For a
+format shared by every cycled provider, use `{session_pct}`,
+`{session_reset}`, `{weekly_pct}`, and `{weekly_reset}`. Cursor maps its two
+usage pools to the session and weekly slots; Kiro maps its single pool to both.
+The [placeholder reference](docs/format-placeholders.md) lists every generic
+and provider-specific field.
+
+`signal: 13` lets the scroll commands refresh the bar through `SIGRTMIN+13`
+instead of waiting for the next interval.
+
+The [KDE plasmoid](kde-plasmoid/README.md) has the same gesture in its own
+settings and never reads or writes the state file this section relies on.
+
+If a tray expander follows `custom/aibar`, the usage text may sit too close to
+its icon. Add right padding in Waybar CSS:
+
+```css
+#custom-aibar {
+    padding-right: 18px;
+}
+```
+
+### Per-vendor modules
+
+If you'd rather see them all at once:
+
+```jsonc
+"modules-right": ["custom/claude", "custom/openai", "custom/openrouter", "custom/zai", "custom/deepseek", "custom/kimi"],
+
+"custom/claude": {
+    "exec": "ai-usagebar --vendor anthropic --icon '󰚩'",
+    "return-type": "json",
+    "interval": 300,
+    "tooltip": true,
+    "on-click": "ai-usagebar-tui"
+},
+"custom/openai": {
+    "exec": "ai-usagebar --vendor openai --icon '󱢆'",
+    "return-type": "json",
+    "interval": 300,
+    "tooltip": true
+},
+"custom/openrouter": {
+    "exec": "ai-usagebar --vendor openrouter --icon '󱙺' --format '{or_balance} · {or_used_today}'",
+    "return-type": "json",
+    "interval": 600,
+    "tooltip": true
+},
+"custom/zai": {
+    "exec": "ai-usagebar --vendor zai --icon '󰚩'",
+    "return-type": "json",
+    "interval": 300,
+    "tooltip": true
+},
+"custom/deepseek": {
+    "exec": "ai-usagebar --vendor deepseek --icon '󰧑'",
+    "return-type": "json",
+    "interval": 600,
+    "tooltip": true
+},
+"custom/kimi": {
+    "exec": "ai-usagebar --vendor kimi --icon '󰚩'",
+    "return-type": "json",
+    "interval": 600,
+    "tooltip": true
+}
+```
+
+> Why 300s? The Anthropic and OpenAI Codex endpoints are undocumented and rate-limit aggressively below ~300s. The cache TTL is 60s so multi-monitor instances coexist, but Waybar's polling interval should stay at 300s.
+
+### Multiple Codex accounts
+
+Two ChatGPT subscriptions, each its own login:
+
+```bash
+CODEX_HOME=~/.codex-work codex login
+```
+
+```toml
+[[openai.accounts]]
+label = "work"
+codex_auth_path = "~/.codex-work/auth.json"
+```
+
+```bash
+ai-usagebar --vendor openai --account work
+```
+
+Each account keeps its own cache and refreshes independently. Without
+`--account`, the default `codex_auth_path` login is used exactly as before.
+
+### Multiple Claude accounts
+
+Named accounts appear as separate TUI tabs and report entries. The recommended
+setup is:
+
+```bash
+ai-usagebar-omarchy account add work
+ai-usagebar --vendor anthropic --account work
+```
+
+On macOS, the same account command can also capture and switch the active
+Claude Desktop or CLI login. The dedicated
+[Claude account guide](docs/claude-accounts.md) covers:
+
+- explicit and auto-discovered accounts;
+- safe credential and cache isolation;
+- Waybar modules for personal and work subscriptions;
+- macOS Desktop and CLI switching, backups, and history conflicts.
+
+### Multiple OpenRouter accounts
+
+Add one `[[openrouter.accounts]]` entry per key, then select it with
+`--vendor openrouter --account <label>`. Named accounts appear separately in
+the TUI, native integrations, and `usage` reports. Each has its own cache, so
+one key's fresh data cannot be shown for another. See the
+[OpenRouter account guide](docs/openrouter-accounts.md) for the config and
+Waybar examples.
+
+## Hyprland: float the TUI window
+
+By default Hyprland tiles the TUI. To make `ai-usagebar-omarchy-tui` open as a centered floating window, the same way Omarchy floats its own settings TUIs (Wi-Fi/`impala`, audio/`wiremix`, Bluetooth/`bluetui`), add this to `~/.config/hypr/hyprland.conf` or any sourced `.conf`, such as `looknfeel.conf`:
+
+```ini
+# ai-usagebar TUI — float + center + fixed size. omarchy-launch-tui sets the
+# app-id from the binary basename, so the class is org.omarchy.ai-usagebar-tui.
+# 875x600 matches the size Omarchy gives its own `floating-window`-tagged TUIs.
+windowrule = float on, match:class ^(org\.omarchy\.ai-usagebar-tui)$
+windowrule = center on, match:class ^(org\.omarchy\.ai-usagebar-tui)$
+windowrule = size 875 600, match:class ^(org\.omarchy\.ai-usagebar-tui)$
+```
+
+Then `hyprctl reload` (no logout needed).
+
+> Omarchy tags a hardcoded list of TUI app-ids with `floating-window` in `~/.local/share/omarchy/default/hypr/apps/system.conf`, which then applies `float + center + size 875 600`. The rules above set those values directly, so the size is deterministic regardless of which config is sourced first. If you launch the TUI differently (e.g. `kitty -e ai-usagebar-omarchy-tui`), replace the class regex with whatever `hyprctl clients` reports for your terminal.
+
+> Hyprland 0.46+ uses the unified `windowrule` keyword with `match:…` filters.
+> The older `windowrulev2 = …, class:…` syntax still works on legacy releases
+> but is deprecated. Use the form above on current Omarchy and Hyprland.
+
+## Provider coverage
+
+The CLI and TUI support every provider in the authentication table above.
+Native desktop coverage varies by integration. The
+[provider endpoint reference](docs/vendor-endpoints.md) lists each endpoint,
+reported metric, desktop selector, stability note, and live-test command.
+
+Run `make smoke` to check live response shapes.
+
+## Format placeholders
+
+Use placeholders in `--format` and `--tooltip-format`:
+
+```bash
+ai-usagebar --vendor anthropic --format '{session_pct}% · {session_reset}'
+ai-usagebar --vendor openrouter --format '${or_balance} remaining'
+```
+
+Shared claudebar placeholders and every provider-specific field are listed in
+the [format placeholder reference](docs/format-placeholders.md).
+
+## Local development
+
+```bash
+ai-usagebar --watch 5                              # iterate on --format live
+ai-usagebar --vendor openrouter --format '{or_balance} · today {or_used_today}'
+
+make test                                          # unit + integration
+source ~/.config/zsh/secrets                       # required for existing vendor smoke tests
+make smoke                                         # runs all ignored tests; only Kimi skips without its key
+make clippy                                        # cargo clippy -D warnings
+```
+
+## TUI controls
+
+![ai-usagebar-tui showing the Codex tab — 5h and weekly gauges, Credits block with message-count ranges, tabs at top, key hints in the footer](screenshots/tui-openai.png)
+
+- `Tab` / `l` / `→` — next tab
+- `Shift+Tab` / `h` / `←` — previous tab
+- `r` — refresh active tab
+- `R` — refresh all tabs
+- `s` — open Settings overlay (primary vendor + API keys)
+- `c` — open local Claude context sessions (only when `[context] enabled = true`); `v` cycles its layout
+- `q` / `Esc` / `Ctrl-C` — quit
+
+The TUI refreshes every 60 seconds. During a refresh it keeps the current values
+visible with a `↻` marker. If the request fails, the last snapshot remains on
+screen and is marked stale.
+
+OpenRouter uses the same layout for balance, usage by period, and account tier:
+
+![ai-usagebar-tui showing the OpenRouter tab — Credit balance gauge at 98% in red ($13.67 left of $900), Usage by period with today/week/month, paid tier](screenshots/tui-openrouter.png)
+
+### Local context overlay
+
+The optional context overlay answers a different local question from the
+vendor tabs: how much input context was present in recent Claude Code sessions.
+Enable it by hand, restart the TUI, and press `c`:
+
+```toml
+[context]
+enabled = true
+layout = "full"                          # full | split | bottom  (`v` cycles)
+# projects_path = "~/.claude/projects"  # this is the default
+# context_window_tokens = 200000         # optional fallback
+
+# Exact model ids override the fallback when 200K and 1M sessions coexist.
+[context.model_context_window_tokens]
+"claude-opus-4-6" = 1000000
+```
+
+The default `full` layout replaces the dashboard body. Press `v` to cycle
+through `full`, `split`, and `bottom` layouts.
+
+- `↑`/`↓` or `j`/`k` selects a session.
+- `Enter` opens its detail gauge.
+- `Esc` returns and `r` rescans.
+
+The percentage follows
+[Claude Code's status-line definition](https://code.claude.com/docs/en/statusline):
+`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. Without
+a trustworthy model window size, the overlay shows tokens instead of guessing
+a percentage. After compaction, it waits for the next assistant response before
+calculating a new value.
+
+The reader handles Claude Code's undocumented local JSONL defensively:
+
+- it reads bounded tails from the 100 most recently modified top-level
+  sessions;
+- it ignores corrupt records and `subagents` sidechains;
+- it does not follow discovered symlinks;
+- it performs filesystem work off the UI thread.
+
+When the feature is disabled, nothing under `~/.claude/projects` is read.
+Context options remain in TOML rather than the Settings modal.
+
+### Settings overlay
+
+![Settings overlay floating over the TUI — Primary vendor radio (Claude selected), masked Z.AI API key (•••), masked OpenRouter API key (•••), Save button, key hints at bottom. This older screenshot predates later API-key providers described below.](screenshots/tui-settings.png)
+
+Press `s` while the TUI is open. The overlay lets you:
+
+- Pick the **primary vendor** that the widget defaults to and that the TUI selects on startup. Use `←` / `→` to cycle.
+- Enter a key for any supported API-key provider. Keys are masked as you type;
+  press `Ctrl-V` to reveal or hide them. The provider's configured environment
+  variable still wins at runtime; the inline key is the fallback. Saving a
+  non-empty key also sets that provider's `enabled = true`.
+
+Key bindings inside the overlay:
+
+- `Tab` / `↑↓` — move between fields
+- `←` / `→` — cycle primary-vendor selection (only on the vendor field)
+- `Ctrl-V` — toggle key visibility on the focused key field
+- `Ctrl-S` — save and close
+- `Esc` — discard and close
+
+Save updates `~/.config/ai-usagebar-omarchy/config.toml` through `toml_edit`, preserving
+comments and unrelated settings. The file is set to mode `600`.
+
+Omarchy's native QML form uses the same Rust persistence path and semantics.
+It never loads stored key values into the long-lived shell process: blank means
+unchanged, clear is explicit, and new values are sent to the binary over stdin.
+
+After saving:
+
+- TUI tabs fetch again immediately.
+- Waybar modules configured with `signal: 13` refresh through `SIGRTMIN+13`.
+- Other Waybar modules refresh on their next interval. Run
+  `pkill -SIGUSR2 waybar` to force a full reload.
+
+## Theming
+
+- One Dark palette by default.
+- Auto-merges with the active Omarchy theme at `~/.config/omarchy/current/theme/colors.toml`.
+- Per-color overrides: `--color-low`, `--color-mid`, `--color-high`, `--color-critical` (claudebar-compatible).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the release history. Each release also has its own page at <https://github.com/KyleLee/ai-usagebar-omarchy/releases> with the auto-generated install snippet and checksum.
+
+## Acknowledgements
+
+This repository is forked from
+[`ai-usagebar`](https://github.com/akitaonrails/ai-usagebar) by
+**AkitaOnRails** — thanks for the original project.
+
+The Codex and Claude OAuth endpoint references came from
+[`claudebar`](https://github.com/mryll/claudebar) and
+[`codexbar`](https://github.com/mryll/codexbar), both by mryll. The bordered
+Pango tooltip, severity colors, and pacing math also come from those projects.
+
+The Kimi `/coding/v1/usages` endpoint reference came from community quota tools: [`CodexBar`](https://github.com/steipete/CodexBar) (steipete), [`OpenUsage`](https://github.com/robinebers/openusage), and [`OmniRoute`](https://github.com/diegosouzapw/OmniRoute).
+
+## License
+
+MIT.

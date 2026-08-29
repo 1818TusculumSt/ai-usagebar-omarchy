@@ -1,0 +1,2032 @@
+//! Fetch a Google Antigravity usage snapshot from a local language server.
+//!
+//! Google ships three separate Antigravity products — Antigravity 2.0, the
+//! `agy` CLI, and the Antigravity IDE — and they all draw on the **same**
+//! account-wide quota. A machine may have any combination of them installed and
+//! running, so this module probes every local server it can find and trusts the
+//! first that answers; there is no need to prefer one product over another.
+//!
+//! Each exposes a CSRF-guarded JSON-RPC surface on a **dynamically assigned**
+//! loopback port (`--https_server_port 0`), so the port cannot be hardcoded.
+//! Quota lives behind `RetrieveUserQuotaSummary`, which reports two model groups
+//! — Gemini, and Claude/GPT — each holding a 5-hour and a weekly bucket.
+//! `GetUserStatus` carries only the plan name; its per-model `quotaInfo` mirrors
+//! whichever bucket is scarcest and must not be read as a window in its own
+//! right.
+
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+
+use crate::cache::{Cache, MAX_STALE, acquire_lock_async};
+use crate::error::{AppError, Result};
+use crate::usage::{AntigravitySnapshot, UsageWindow};
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+
+const QUOTA_RPC: &str = "exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+const STATUS_RPC: &str = "exa.language_server_pb.LanguageServerService/GetUserStatus";
+
+const DEFAULT_PLAN: &str = "Antigravity";
+
+#[derive(Debug, Clone)]
+pub struct FetchOutcome {
+    pub snapshot: AntigravitySnapshot,
+    pub stale: bool,
+    pub last_error: Option<(u16, String)>,
+    pub cache_age: Option<Duration>,
+}
+
+impl From<FetchOutcome> for crate::vendor::VendorOutcome {
+    fn from(o: FetchOutcome) -> Self {
+        Self {
+            snapshot: crate::usage::VendorSnapshot::Antigravity(o.snapshot),
+            stale: o.stale,
+            last_error: o.last_error,
+            cache_age: o.cache_age,
+        }
+    }
+}
+
+pub async fn fetch_snapshot(
+    client: &reqwest::Client,
+    cache: &Cache,
+    cache_ttl: Duration,
+) -> Result<FetchOutcome> {
+    fetch_snapshot_at(client, cache, cache_ttl, Utc::now()).await
+}
+
+/// Clock seam for [`fetch_snapshot`], so window expiry can be exercised at
+/// fixed instants instead of against the wall clock.
+pub async fn fetch_snapshot_at(
+    client: &reqwest::Client,
+    cache: &Cache,
+    cache_ttl: Duration,
+    now: DateTime<Utc>,
+) -> Result<FetchOutcome> {
+    cache.ensure_dir()?;
+    let _lock = acquire_lock_async(&cache.lock_path(), LOCK_TIMEOUT).await?;
+
+    // Resolve the signed-in account first so a fresh cache can be attributed.
+    // Unlike Grok — where the same check would cost a remote round-trip on
+    // every poll — this is loopback, and it is the call that would supply the
+    // plan name anyway, so verification is effectively free.
+    let session = open_session(client).await;
+    let account = session.as_ref().ok().map(|s| s.account.as_str());
+
+    if let Some(bytes) = cache.fresh_payload(cache_ttl)?
+        && let Ok(outcome) = reuse_cache(bytes, cache, false, account, now)
+    {
+        return Ok(outcome);
+    }
+
+    match fetch_live(client, session).await {
+        Ok(snap) => {
+            let bytes = serde_json::to_vec(&snap_to_json(&snap))?;
+            cache.write_payload(&bytes)?;
+            Ok(FetchOutcome {
+                snapshot: snap,
+                stale: false,
+                last_error: None,
+                cache_age: Some(Duration::ZERO),
+            })
+        }
+        Err(e) if e.is_transient() => fallback_silent(cache, now, e),
+        Err(AppError::Http { status, body }) => {
+            cache.mark_stale();
+            let last_error = Some(cache.write_last_error(status, &body));
+            let reason = AppError::Http { status, body };
+            fallback_with_error(cache, last_error, reason, now)
+        }
+        Err(e) => {
+            cache.mark_stale();
+            let last_error = Some(cache.write_last_error(0, &e.to_string()));
+            fallback_with_error(cache, last_error, e, now)
+        }
+    }
+}
+
+/// A local server that answered `GetUserStatus`: where it lives, how to talk to
+/// it, and whose account it is signed in as.
+struct Session {
+    base: String,
+    csrf: Option<String>,
+    plan: String,
+    account: String,
+}
+
+/// Walk every candidate language server until one identifies itself. A machine
+/// can host more than one — the desktop app, the IDE and an interactive `agy`
+/// session each run their own — and only some of them are signed in.
+async fn open_session(client: &reqwest::Client) -> Result<Session> {
+    let bases = candidate_bases();
+    if bases.is_empty() {
+        return Err(AppError::Credentials(
+            "Antigravity: no local server found. Quota is only served while Antigravity is \
+             running — open the Antigravity app, or an interactive `agy` session, or point \
+             ANTIGRAVITY_LS_ADDRESS at a host:port."
+                .into(),
+        ));
+    }
+
+    let mut errors = Vec::new();
+    for base in bases {
+        let csrf = fetch_csrf(client, &base).await;
+        match post_rpc(client, &base, csrf.as_deref(), STATUS_RPC).await {
+            Ok(v) => {
+                return Ok(Session {
+                    base,
+                    csrf,
+                    plan: plan_from_status(&v),
+                    account: account_key(&v),
+                });
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+    Err(select_probe_error(errors))
+}
+
+/// Which failure to report when no candidate answered.
+///
+/// A server that replies `401`/`403` is running and reachable but signed out —
+/// the user can act on that, so it outranks the connection refusals from the
+/// products that simply are not up. Without this, a stale
+/// `ANTIGRAVITY_LS_ADDRESS` (or a second product on another port) would mask
+/// the one message worth reading behind transport noise.
+///
+/// Note that this also decides *visibility*: transport errors are transient and
+/// fall back silently to cache, while the `401` surfaces in the widget. That is
+/// why a TLS listener's echo is ranked below everything else rather than merely
+/// tie-breaking — see [`is_tls_echo`]. Being an `Http`, it is not transient, so
+/// letting it stand as "the last failure" turns a product that simply is not
+/// serving RPC into a visible error about a protocol the user never chose.
+fn select_probe_error(errors: Vec<AppError>) -> AppError {
+    let mut actionable = None;
+    let mut last = None;
+    let mut echo = None;
+    for e in errors {
+        if actionable.is_none() && is_actionable(&e) {
+            actionable = Some(e);
+        } else if is_tls_echo(&e) {
+            echo = Some(e);
+        } else {
+            last = Some(e);
+        }
+    }
+    actionable.or(last).or(echo).unwrap_or_else(|| {
+        AppError::Other("antigravity: no local server answered GetUserStatus".into())
+    })
+}
+
+/// An error the user can do something about, as opposed to "that product is not
+/// running". `post_rpc` only ever yields `Http`/`Transport`/`Other`, so the
+/// authentication statuses are the whole set.
+fn is_actionable(e: &AppError) -> bool {
+    matches!(e, AppError::Http { status, .. } if *status == 401 || *status == 403)
+}
+
+/// A TLS listener answering the plaintext JSON-RPC probe.
+///
+/// Each Antigravity product binds two ports: JSON-RPC in the clear on one and
+/// HTTPS on another. `probe_order` deliberately tries the RPC listener first
+/// and leaves the TLS one behind it, so reaching the TLS port at all means the
+/// RPC port already had its say. Go's `net/http.Server` answers cleartext on a
+/// TLS listener with this fixed `400`, which describes our own probe rather
+/// than anything wrong with the product — as a diagnosis it is noise that
+/// always arrives last and therefore always wins.
+///
+/// Matched on the body, not the status alone: a real `400` from the language
+/// server is a genuine complaint about the request and must keep outranking it.
+fn is_tls_echo(e: &AppError) -> bool {
+    matches!(
+        e,
+        AppError::Http { status: 400, body } if body.contains("HTTP request to an HTTPS server")
+    )
+}
+
+async fn fetch_live(
+    client: &reqwest::Client,
+    session: Result<Session>,
+) -> Result<AntigravitySnapshot> {
+    let session = session?;
+    let quota = post_rpc(client, &session.base, session.csrf.as_deref(), QUOTA_RPC).await?;
+    let mut snap = parse_quota_summary(&quota, session.plan)?;
+    snap.account = session.account;
+    Ok(snap)
+}
+
+/// Identity of the signed-in account, fingerprinted rather than stored in
+/// clear — the cache only needs a change detector, not the address itself.
+/// An unidentifiable response yields a stable "unknown" bucket so two such
+/// responses still compare equal.
+fn account_key(user_status: &serde_json::Value) -> String {
+    let email = user_status["userStatus"]["email"]
+        .as_str()
+        .filter(|s| !s.is_empty());
+    match email {
+        Some(e) => {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            e.hash(&mut h);
+            format!("acct:{:016x}", h.finish())
+        }
+        None => "acct:unknown".to_string(),
+    }
+}
+
+/// The Antigravity 2.0 server embeds a CSRF token in the HTML it serves at `/`
+/// and rejects the RPC without it. The `agy` CLI serves no such page — it 404s
+/// at `/` and answers the RPC unauthenticated — so a missing token is not an
+/// error here, just a server that does not use one.
+async fn fetch_csrf(client: &reqwest::Client, base: &str) -> Option<String> {
+    let resp = client.get(base).timeout(HTTP_TIMEOUT).send().await.ok()?;
+    // Bounded like every other response this crate reads: a local server is
+    // still an untrusted source of unbounded bytes.
+    let bytes = crate::vendor::read_body_capped(resp, crate::vendor::MAX_BODY_BYTES)
+        .await
+        .ok()?;
+    let html = String::from_utf8_lossy(&bytes);
+    html.split("csrfToken\":\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+}
+
+async fn post_rpc(
+    client: &reqwest::Client,
+    base: &str,
+    csrf: Option<&str>,
+    rpc: &str,
+) -> Result<serde_json::Value> {
+    let mut req = client
+        .post(format!("{base}/{rpc}"))
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .timeout(HTTP_TIMEOUT);
+    if let Some(token) = csrf {
+        req = req.header("x-codeium-csrf-token", token);
+    }
+    let resp = req.send().await?;
+
+    let status = resp.status();
+    // Cap error bodies too. A local endpoint is still untrusted, and reading a
+    // non-2xx response with `text()` would bypass the invariant enforced for
+    // successful JSON responses.
+    let bytes = crate::vendor::read_body_capped(resp, crate::vendor::MAX_BODY_BYTES).await?;
+    if !status.is_success() {
+        let body = String::from_utf8_lossy(&bytes).into_owned();
+        return Err(AppError::Http {
+            status: status.as_u16(),
+            body,
+        });
+    }
+
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+pub fn plan_from_status(v: &serde_json::Value) -> String {
+    v["userStatus"]["userTier"]["name"]
+        .as_str()
+        .or_else(|| v["userStatus"]["userTier"]["description"].as_str())
+        .or_else(|| v["userStatus"]["planStatus"]["planInfo"]["planName"].as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_PLAN)
+        .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Quota parsing
+// ---------------------------------------------------------------------------
+
+/// Map a `RetrieveUserQuotaSummary` payload onto the four usage windows.
+///
+/// Buckets are keyed by `bucketId` (`gemini-5h`, `gemini-weekly`, `3p-5h`,
+/// `3p-weekly`), falling back to the group display name plus the `window`
+/// discriminator so a renamed bucket id still lands in the right slot.
+pub fn parse_quota_summary(v: &serde_json::Value, plan: String) -> Result<AntigravitySnapshot> {
+    let groups = v["response"]["groups"]
+        .as_array()
+        .or_else(|| v["groups"].as_array())
+        .ok_or_else(|| AppError::Other("antigravity: quota summary has no groups".into()))?;
+
+    let mut gemini_5h = None;
+    let mut gemini_weekly = None;
+    let mut tp_5h = None;
+    let mut tp_weekly = None;
+
+    for group in groups {
+        let group_name = group["displayName"].as_str().unwrap_or_default();
+        let Some(buckets) = group["buckets"].as_array() else {
+            continue;
+        };
+        for bucket in buckets {
+            let id = bucket["bucketId"].as_str().unwrap_or_default();
+            let window = bucket["window"].as_str().unwrap_or_default();
+            let is_weekly = if id.ends_with("weekly") || window == "weekly" {
+                true
+            } else if id.ends_with("5h") || window == "5h" {
+                false
+            } else {
+                // A new cadence is not a 5-hour bucket by default. Ignore it
+                // so it cannot overwrite a known slot.
+                continue;
+            };
+            let is_gemini = if id.starts_with("gemini") {
+                true
+            } else if id.starts_with("3p") {
+                false
+            } else if group_name.contains("Gemini") {
+                true
+            } else if group_name.contains("Claude") || group_name.contains("GPT") {
+                false
+            } else {
+                // Likewise, an unrelated future group is not implicitly the
+                // third-party pool.
+                continue;
+            };
+
+            let (slot, slot_name) = match (is_gemini, is_weekly) {
+                (true, false) => (&mut gemini_5h, "Gemini 5h"),
+                (true, true) => (&mut gemini_weekly, "Gemini weekly"),
+                (false, false) => (&mut tp_5h, "Claude/GPT 5h"),
+                (false, true) => (&mut tp_weekly, "Claude/GPT weekly"),
+            };
+            let parsed = usage_window(bucket, is_weekly)?;
+            if slot.replace(parsed).is_some() {
+                return Err(AppError::Schema(format!(
+                    "antigravity: duplicate {slot_name} bucket"
+                )));
+            }
+        }
+    }
+
+    let session = gemini_5h.ok_or_else(|| {
+        AppError::Other("antigravity: quota summary has no Gemini 5h bucket".into())
+    })?;
+    let weekly = gemini_weekly.ok_or_else(|| {
+        AppError::Other("antigravity: quota summary has no Gemini weekly bucket".into())
+    })?;
+
+    Ok(AntigravitySnapshot {
+        plan,
+        // Stamped by the caller, which is what knows the session's identity.
+        account: String::new(),
+        session,
+        weekly,
+        third_party_session: tp_5h,
+        third_party_weekly: tp_weekly,
+    })
+}
+
+/// `remainingFraction` is required and must be finite: defaulting a missing or
+/// drifted value to 1.0 would report a reassuring "0% used" for a window whose
+/// real state is unknown, and cache it.
+fn usage_window(bucket: &serde_json::Value, is_weekly: bool) -> Result<UsageWindow> {
+    let remaining = bucket["remainingFraction"]
+        .as_f64()
+        .filter(|f| f.is_finite() && (0.0..=1.0).contains(f))
+        .ok_or_else(|| {
+            AppError::Schema(format!(
+                "antigravity: bucket {} has no valid remainingFraction in 0..=1",
+                bucket["bucketId"].as_str().unwrap_or("<unnamed>")
+            ))
+        })?;
+    Ok(UsageWindow {
+        utilization_pct: pct_used(remaining),
+        resets_at: parse_reset(&bucket["resetTime"], "quota resetTime")?,
+        window_duration: if is_weekly {
+            chrono::Duration::days(7)
+        } else {
+            chrono::Duration::hours(5)
+        },
+    })
+}
+
+/// The API reports how much is *left*; every other vendor here reports how much
+/// is *spent*.
+fn pct_used(remaining_fraction: f64) -> i32 {
+    let used = (1.0 - remaining_fraction) * 100.0;
+    used.round() as i32
+}
+
+fn parse_reset(value: &serde_json::Value, field: &str) -> Result<Option<DateTime<Utc>>> {
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => DateTime::parse_from_rfc3339(s)
+            .map(|dt| Some(dt.with_timezone(&Utc)))
+            .map_err(|_| AppError::Schema(format!("antigravity: invalid {field}"))),
+        _ => Err(AppError::Schema(format!(
+            "antigravity: {field} must be a timestamp or null"
+        ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Language server discovery
+// ---------------------------------------------------------------------------
+
+/// Base URLs worth probing, most specific first.
+fn candidate_bases() -> Vec<String> {
+    candidate_bases_with(
+        std::env::var("ANTIGRAVITY_LS_ADDRESS").ok().as_deref(),
+        discover_ls_ports(),
+    )
+}
+
+/// Test seam for [`candidate_bases`] — takes the address override and the
+/// discovered ports instead of reading the environment and `/proc`.
+fn candidate_bases_with(override_addr: Option<&str>, discovered: Vec<u16>) -> Vec<String> {
+    let mut bases = Vec::new();
+    if let Some(base) = override_addr.and_then(normalize_base) {
+        bases.push(base);
+    }
+
+    // No hardcoded fallback port on purpose: the server always binds with
+    // `--https_server_port 0`, so its port is drawn from the ephemeral range
+    // and cannot be guessed. Probing a fixed one would just poke whatever
+    // unrelated process happens to own it. Discovered ports follow any
+    // explicit override as fallback, with duplicates omitted.
+    for p in discovered {
+        let candidate = format!("http://127.0.0.1:{p}");
+        if !bases.contains(&candidate) {
+            bases.push(candidate);
+        }
+    }
+
+    bases
+}
+
+/// Turn a configured address into a base URL: trim surrounding whitespace,
+/// supply the default scheme when it is missing, and drop trailing slashes so
+/// the RPC paths built on top do not come out with a double slash.
+///
+/// Returns `None` when nothing but a scheme survives. `ANTIGRAVITY_LS_ADDRESS`
+/// is user input, and a value like `"/"` carries no authority to connect to;
+/// admitting it as a candidate would spend a probe to learn what is already
+/// knowable here.
+fn normalize_base(addr: &str) -> Option<String> {
+    let trimmed = addr.trim();
+    let (scheme, authority) = match trimmed.split_once("://") {
+        Some((scheme @ ("http" | "https"), rest)) => (scheme, rest),
+        _ => ("http", trimmed),
+    };
+    let authority = authority.trim_end_matches('/');
+    (!authority.is_empty()).then(|| format!("{scheme}://{authority}"))
+}
+
+/// Does this process look like one of the three Antigravity products?
+///
+/// Antigravity 2.0 and the IDE spawn a separate `language_server` child, while
+/// the `agy` CLI embeds the same CSRF/RPC surface in its own process — so
+/// matching on the server binary alone would miss a CLI-only install. `comm` is
+/// truncated to 15 bytes by the kernel, which `language_server` exactly fills.
+fn is_antigravity_process(comm: &str, exe: Option<&str>) -> bool {
+    let comm = comm.trim().to_lowercase();
+    let comm = comm.strip_suffix(".exe").unwrap_or(&comm);
+    if comm.contains("language_server") || comm == "agy" || comm == "antigravity" {
+        return true;
+    }
+    exe.is_some_and(|p| {
+        let p = p.to_lowercase().replace('\\', "/");
+        let p = p.strip_suffix(".exe").unwrap_or(&p);
+        p.contains("antigravity") || p.ends_with("/agy")
+    })
+}
+
+/// Flatten per-process listener ports into the order they should be probed.
+///
+/// Each Antigravity product binds an HTTPS/TLS listener and the unencrypted
+/// HTTP JSON-RPC listener that serves `GetUserStatus` and
+/// `RetrieveUserQuotaSummary`. Both are ephemeral, but they are bound in that
+/// order, so in practice the RPC listener draws the higher number and probing
+/// high-to-low reaches it first — which keeps Go's `net/http.Server` from
+/// logging a TLS handshake error for every unencrypted request that lands on
+/// its HTTPS listener.
+///
+/// Sorting every discovered port as one descending set only gets that right
+/// for a single process, because the high/low tendency holds *within* a
+/// product and says nothing across two of them: with Antigravity 2.0 and an
+/// `agy` session both up, one product's TLS port can sort above the other's
+/// RPC port. Ports are therefore grouped per pid, sorted high-to-low inside
+/// each group, and taken rank by rank — every product's highest port, then
+/// every product's second-highest, and so on. Where each product shows both
+/// listeners that puts every RPC one ahead of every TLS one.
+///
+/// This stays a preference, not a guarantee, and the two-listener shape is the
+/// assumption it rests on: a product caught mid-startup, with only its TLS port
+/// bound so far, sits alone at rank 0 and is probed first. Every candidate is
+/// probed regardless, so a mis-ranked one costs an extra round-trip and a line
+/// on `agy`'s stderr, nothing more.
+///
+/// Order among products is arbitrary — all of them report the same
+/// account-wide quota, so whichever answers first is authoritative — and pid
+/// order is used only to keep the result reproducible, since `/proc`, `lsof`
+/// and the Windows TCP table each enumerate in their own order.
+#[cfg(any(test, target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn probe_order(per_pid: std::collections::BTreeMap<u32, Vec<u16>>) -> Vec<u16> {
+    let groups: Vec<Vec<u16>> = per_pid
+        .into_values()
+        .map(|mut group| {
+            group.sort_unstable_by(|a, b| b.cmp(a));
+            // Within a product a port is one listener however many rows named
+            // it — a dual-stack bind reports the same port from both
+            // `/proc/net/tcp` and `tcp6`. Collapsing them here keeps a rank
+            // meaning "the Nth listener" rather than "the Nth row".
+            group.dedup();
+            group
+        })
+        .collect();
+
+    let mut ports: Vec<u16> = Vec::new();
+    for rank in 0..groups.iter().map(Vec::len).max().unwrap_or(0) {
+        for port in groups.iter().filter_map(|group| group.get(rank)) {
+            if !ports.contains(port) {
+                ports.push(*port);
+            }
+        }
+    }
+    ports
+}
+
+/// Loopback ports listened on by any running Antigravity product.
+///
+/// Reads `/proc` directly rather than shelling out to `ss`/`lsof`: find the
+/// candidate pids, collect their socket inodes, then keep the listening TCP
+/// entries owning one of those inodes. All three products report the *same*
+/// shared quota, so whichever answers first is authoritative.
+#[cfg(target_os = "linux")]
+fn discover_ls_ports() -> Vec<u16> {
+    use std::collections::{BTreeMap, HashMap};
+
+    // Socket inode -> owning pid, so the ports found in `/proc/net` can be
+    // grouped back per process for `probe_order`.
+    let mut owners: HashMap<u64, u32> = HashMap::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    for entry in entries.flatten() {
+        let pid_dir = entry.path();
+        let Some(pid) = pid_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(comm) = std::fs::read_to_string(pid_dir.join("comm")) else {
+            continue;
+        };
+        let exe = std::fs::read_link(pid_dir.join("exe")).ok();
+        if !is_antigravity_process(&comm, exe.as_deref().and_then(|p| p.to_str())) {
+            continue;
+        }
+        let Ok(fds) = std::fs::read_dir(pid_dir.join("fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            let Ok(target) = std::fs::read_link(fd.path()) else {
+                continue;
+            };
+            if let Some(ino) = target
+                .to_str()
+                .and_then(|s| s.strip_prefix("socket:["))
+                .and_then(|s| s.strip_suffix(']'))
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                owners.insert(ino, pid);
+            }
+        }
+    }
+
+    if owners.is_empty() {
+        return Vec::new();
+    }
+
+    let mut per_pid: BTreeMap<u32, Vec<u16>> = BTreeMap::new();
+    for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let Ok(contents) = std::fs::read_to_string(table) else {
+            continue;
+        };
+        for line in contents.lines().skip(1) {
+            if let Some((port, ino)) = parse_proc_net_line(line)
+                && let Some(&pid) = owners.get(&ino)
+            {
+                per_pid.entry(pid).or_default().push(port);
+            }
+        }
+    }
+    probe_order(per_pid)
+}
+
+/// macOS has no `/proc`, so fall back to `lsof` (present on every macOS
+/// install by default, unlike Linux where shelling out was deliberately
+/// avoided — see the doc comment above). `-F pcn` asks for machine-parsable
+/// output: one `p<pid>` line per process, one `c<command>` line for its name,
+/// then an `n<address>` line per matching socket already filtered down to
+/// listening TCP sockets by `-iTCP -sTCP:LISTEN`.
+#[cfg(target_os = "macos")]
+fn discover_ls_ports() -> Vec<u16> {
+    let Ok(output) = std::process::Command::new("lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    // A non-zero exit still emits usable output for the fds it *could* read,
+    // so parse regardless of status — an empty/garbled stdout just parses to
+    // an empty port list.
+    parse_lsof_pcn(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Pure parser for `lsof -F pcn` output, kept separate from process spawning
+/// so the parsing logic is unit-testable without shelling out. Compiled under
+/// `test` on every platform, like [`matching_windows_ports`], so its tests are
+/// not macOS-only.
+#[cfg(any(test, target_os = "macos"))]
+fn parse_lsof_pcn(output: &str) -> Vec<u16> {
+    let mut per_pid: std::collections::BTreeMap<u32, Vec<u16>> = std::collections::BTreeMap::new();
+    // The pid arrives on the `p` line and the command name on the `c` line
+    // right after it, so hold the pid until the name confirms it is ours.
+    let mut pid = None;
+    let mut owner = None;
+    for line in output.lines() {
+        let Some(rest) = line.get(1..) else { continue };
+        match line.as_bytes().first() {
+            Some(b'p') => {
+                pid = rest.parse::<u32>().ok();
+                owner = None;
+            }
+            Some(b'c') => owner = pid.filter(|_| is_antigravity_process(rest, None)),
+            Some(b'n') => {
+                if let Some(pid) = owner
+                    && let Some(port) = rest.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())
+                {
+                    per_pid.entry(pid).or_default().push(port);
+                }
+            }
+            _ => {}
+        }
+    }
+    probe_order(per_pid)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsTcpRow {
+    local_addr: [u8; 4],
+    local_port: u32,
+    pid: u32,
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn decode_windows_process_name(raw: &[u16]) -> String {
+    let end = raw.iter().position(|&unit| unit == 0).unwrap_or(raw.len());
+    String::from_utf16_lossy(&raw[..end])
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn matching_windows_process_ids(processes: &[(u32, String)]) -> std::collections::HashSet<u32> {
+    processes
+        .iter()
+        .filter(|(_, name)| is_antigravity_process(name, None))
+        .map(|(pid, _)| *pid)
+        .collect()
+}
+
+/// Loopback ports owned by the matching processes, grouped per pid and handed
+/// to [`probe_order`], which explains why the grouping matters.
+#[cfg(any(test, target_os = "windows"))]
+fn matching_windows_ports(
+    pids: &std::collections::HashSet<u32>,
+    rows: &[WindowsTcpRow],
+) -> Vec<u16> {
+    let mut per_pid: std::collections::BTreeMap<u32, Vec<u16>> = std::collections::BTreeMap::new();
+    for row in rows {
+        if !pids.contains(&row.pid) || row.local_addr != [127, 0, 0, 1] {
+            continue;
+        }
+        let port = u16::from_be((row.local_port & u32::from(u16::MAX)) as u16);
+        if port != 0 {
+            per_pid.entry(row.pid).or_default().push(port);
+        }
+    }
+    probe_order(per_pid)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn checked_windows_row_count(
+    buffer_len: usize,
+    rows_offset: usize,
+    row_size: usize,
+    declared: usize,
+) -> Option<usize> {
+    let rows_len = row_size.checked_mul(declared)?;
+    let end = rows_offset.checked_add(rows_len)?;
+    (row_size != 0 && end <= buffer_len).then_some(declared)
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsHandle(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_processes() -> Vec<(u32, String)> {
+    use std::mem::size_of;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if handle == INVALID_HANDLE_VALUE {
+        return Vec::new();
+    }
+    let snapshot = WindowsHandle(handle);
+    let mut entry = PROCESSENTRY32W::default();
+    let Ok(entry_size) = u32::try_from(size_of::<PROCESSENTRY32W>()) else {
+        return Vec::new();
+    };
+    entry.dwSize = entry_size;
+    if unsafe { Process32FirstW(snapshot.0, &mut entry) } == 0 {
+        return Vec::new();
+    }
+
+    let mut processes = Vec::new();
+    loop {
+        processes.push((
+            entry.th32ProcessID,
+            decode_windows_process_name(&entry.szExeFile),
+        ));
+        if unsafe { Process32NextW(snapshot.0, &mut entry) } == 0 {
+            break;
+        }
+    }
+    processes
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_tcp_rows(buffer: &[u32], used_bytes: usize) -> Vec<WindowsTcpRow> {
+    use std::mem::{offset_of, size_of, size_of_val};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
+    };
+
+    let available = used_bytes.min(size_of_val(buffer));
+    let rows_offset = offset_of!(MIB_TCPTABLE_OWNER_PID, table);
+    if available < size_of::<u32>() || available < rows_offset {
+        return Vec::new();
+    }
+    let base = buffer.as_ptr().cast::<u8>();
+    let declared = unsafe { base.cast::<u32>().read_unaligned() } as usize;
+    if checked_windows_row_count(
+        available,
+        rows_offset,
+        size_of::<MIB_TCPROW_OWNER_PID>(),
+        declared,
+    )
+    .is_none()
+    {
+        return Vec::new();
+    }
+
+    let rows = unsafe { base.add(rows_offset).cast::<MIB_TCPROW_OWNER_PID>() };
+    (0..declared)
+        .map(|index| unsafe { rows.add(index).read_unaligned() })
+        .map(|row| WindowsTcpRow {
+            local_addr: row.dwLocalAddr.to_ne_bytes(),
+            local_port: row.dwLocalPort,
+            pid: row.dwOwningPid,
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_tcp_rows() -> Vec<WindowsTcpRow> {
+    use std::mem::size_of;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, TCP_TABLE_OWNER_PID_LISTENER,
+    };
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+    let mut size = 0u32;
+    let status = unsafe {
+        GetExtendedTcpTable(
+            null_mut(),
+            &mut size,
+            0,
+            u32::from(AF_INET),
+            TCP_TABLE_OWNER_PID_LISTENER,
+            0,
+        )
+    };
+    if status != ERROR_INSUFFICIENT_BUFFER {
+        return Vec::new();
+    }
+
+    for _ in 0..3 {
+        let Some(words) = (size as usize)
+            .checked_add(size_of::<u32>() - 1)
+            .map(|bytes| bytes / size_of::<u32>())
+        else {
+            return Vec::new();
+        };
+        if words == 0 {
+            return Vec::new();
+        }
+        let mut buffer = Vec::<u32>::new();
+        if buffer.try_reserve_exact(words).is_err() {
+            return Vec::new();
+        }
+        buffer.resize(words, 0);
+        let mut used = size;
+        let status = unsafe {
+            GetExtendedTcpTable(
+                buffer.as_mut_ptr().cast(),
+                &mut used,
+                0,
+                u32::from(AF_INET),
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
+        };
+        if status == ERROR_INSUFFICIENT_BUFFER {
+            size = used;
+            continue;
+        }
+        if status != 0 {
+            return Vec::new();
+        }
+        return parse_windows_tcp_rows(&buffer, used as usize);
+    }
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+fn discover_ls_ports() -> Vec<u16> {
+    let pids = matching_windows_process_ids(&windows_processes());
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    matching_windows_ports(&pids, &windows_tcp_rows())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn discover_ls_ports() -> Vec<u16> {
+    Vec::new()
+}
+
+/// Pull `(local_port, inode)` out of a listening row of `/proc/net/tcp`.
+/// Columns: `sl local_address rem_address st ... uid timeout inode`.
+#[cfg(target_os = "linux")]
+fn parse_proc_net_line(line: &str) -> Option<(u16, u64)> {
+    let cols: Vec<&str> = line.split_whitespace().collect();
+    if cols.len() < 10 {
+        return None;
+    }
+    // 0x0A == TCP_LISTEN. Anything else is an established/closing socket.
+    if cols[3] != "0A" {
+        return None;
+    }
+    let port = u16::from_str_radix(cols[1].split(':').nth(1)?, 16).ok()?;
+    let inode = cols[9].parse::<u64>().ok()?;
+    Some((port, inode))
+}
+
+// ---------------------------------------------------------------------------
+// Cache
+// ---------------------------------------------------------------------------
+
+fn fallback_silent(cache: &Cache, now: DateTime<Utc>, original: AppError) -> Result<FetchOutcome> {
+    let Some(bytes) = cache.fallback_payload(MAX_STALE)? else {
+        return Err(original);
+    };
+    reuse_cache(bytes, cache, true, None, now).or(Err(original))
+}
+
+/// Serve the stale cache when there is one. With no cache to fall back on,
+/// surface `reason` — the actual diagnosis, e.g. "no local language server
+/// found" — rather than a generic cache-miss that tells the user nothing about
+/// what to do. This is the first-run path: no cache yet and Antigravity closed.
+fn fallback_with_error(
+    cache: &Cache,
+    last_error: Option<(u16, String)>,
+    reason: AppError,
+    now: DateTime<Utc>,
+) -> Result<FetchOutcome> {
+    let Some(bytes) = cache.fallback_payload(MAX_STALE)? else {
+        return Err(reason);
+    };
+    let Ok(mut outcome) = reuse_cache(bytes, cache, true, None, now) else {
+        return Err(reason);
+    };
+    outcome.last_error = last_error;
+    Ok(outcome)
+}
+
+fn reuse_cache(
+    bytes: Vec<u8>,
+    cache: &Cache,
+    stale: bool,
+    account: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<FetchOutcome> {
+    let snap = parse_cache_at(&bytes, account, now)?;
+    Ok(FetchOutcome {
+        snapshot: snap,
+        stale,
+        last_error: cache.read_last_error(),
+        cache_age: cache.payload_age(),
+    })
+}
+
+/// `account` is the fingerprint of the currently signed-in account, or `None`
+/// when no local server answered. A payload belonging to a different account is
+/// rejected so a Google-account switch cannot show the previous account's
+/// quota. With `None` we cannot verify — but nothing is consuming quota while
+/// Antigravity is down, so the last known figures are the best available truth.
+pub fn parse_cache(bytes: &[u8], account: Option<&str>) -> Result<AntigravitySnapshot> {
+    parse_cache_at(bytes, account, Utc::now())
+}
+
+/// A cached window whose reset has already passed describes a period that has
+/// since rolled over: the real figure is back near zero while the payload still
+/// carries the old one, and its countdown is pinned at "now". Serving that is
+/// presenting a known-obsolete number as current, so the payload is refused and
+/// the caller reports that Antigravity needs to be running.
+///
+/// This matters more here than for other vendors: "nothing running" is the
+/// normal state for Antigravity, and `MAX_STALE` is seven days — far past the
+/// five hours after which the session window is guaranteed wrong.
+fn expired_window(snap: &AntigravitySnapshot, now: DateTime<Utc>) -> Option<&'static str> {
+    [
+        ("Gemini 5h", Some(&snap.session)),
+        ("Gemini weekly", Some(&snap.weekly)),
+        ("Claude & GPT OSS 5h", snap.third_party_session.as_ref()),
+        ("Claude & GPT OSS weekly", snap.third_party_weekly.as_ref()),
+    ]
+    .into_iter()
+    .find(|(_, w)| w.and_then(|w| w.resets_at).is_some_and(|r| r <= now))
+    .map(|(name, _)| name)
+}
+
+pub fn parse_cache_at(
+    bytes: &[u8],
+    account: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<AntigravitySnapshot> {
+    let v: serde_json::Value = serde_json::from_slice(bytes)?;
+
+    let cached_account = v.get("account").and_then(serde_json::Value::as_str);
+    if let Some(expected) = account
+        && cached_account != Some(expected)
+    {
+        return Err(AppError::Schema(
+            "antigravity cache belongs to a different account; refetching".into(),
+        ));
+    }
+
+    // The Gemini windows are required. Defaulting a missing or truncated field
+    // to 0 would render a confident "0% used" and keep serving it for the rest
+    // of the TTL; returning an error makes the caller fall through to a live
+    // fetch instead of displaying a fabricated snapshot.
+    let cached_pct = |pct_key: &'static str| -> Result<Option<i32>> {
+        match v.get(pct_key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(value) => value
+                .as_i64()
+                .filter(|pct| (0..=100).contains(pct))
+                .map(|pct| Some(pct as i32))
+                .ok_or_else(|| {
+                    AppError::Schema(format!(
+                        "antigravity: cached {pct_key} must be an integer in 0..=100"
+                    ))
+                }),
+        }
+    };
+
+    let window = |pct_key: &'static str, reset_key: &str, weekly: bool| {
+        let pct = cached_pct(pct_key)?.ok_or_else(|| {
+            AppError::Schema(format!("antigravity: cached payload missing {pct_key}"))
+        })?;
+        Ok::<_, AppError>(UsageWindow {
+            utilization_pct: pct,
+            resets_at: parse_reset(&v[reset_key], reset_key)?,
+            window_duration: if weekly {
+                chrono::Duration::days(7)
+            } else {
+                chrono::Duration::hours(5)
+            },
+        })
+    };
+
+    let optional = |pct_key: &'static str, reset_key: &str, weekly: bool| {
+        let Some(pct) = cached_pct(pct_key)? else {
+            return Ok(None);
+        };
+        Ok::<_, AppError>(Some(UsageWindow {
+            utilization_pct: pct,
+            resets_at: parse_reset(&v[reset_key], reset_key)?,
+            window_duration: if weekly {
+                chrono::Duration::days(7)
+            } else {
+                chrono::Duration::hours(5)
+            },
+        }))
+    };
+
+    let snap = AntigravitySnapshot {
+        plan: v["plan"].as_str().unwrap_or(DEFAULT_PLAN).to_string(),
+        account: cached_account.unwrap_or_default().to_string(),
+        session: window("session_pct", "session_reset", false)?,
+        weekly: window("weekly_pct", "weekly_reset", true)?,
+        third_party_session: optional("tp_session_pct", "tp_session_reset", false)?,
+        third_party_weekly: optional("tp_weekly_pct", "tp_weekly_reset", true)?,
+    };
+
+    if let Some(window) = expired_window(&snap, now) {
+        return Err(AppError::Schema(format!(
+            "antigravity cache is past its {window} reset; refetching"
+        )));
+    }
+    Ok(snap)
+}
+
+pub fn snap_to_json(snap: &AntigravitySnapshot) -> serde_json::Value {
+    serde_json::json!({
+        "plan": snap.plan,
+        "account": snap.account,
+        "session_pct": snap.session.utilization_pct,
+        "session_reset": snap.session.resets_at.map(|dt| dt.to_rfc3339()),
+        "weekly_pct": snap.weekly.utilization_pct,
+        "weekly_reset": snap.weekly.resets_at.map(|dt| dt.to_rfc3339()),
+        "tp_session_pct": snap.third_party_session.as_ref().map(|w| w.utilization_pct),
+        "tp_session_reset": snap.third_party_session.as_ref().and_then(|w| w.resets_at.map(|dt| dt.to_rfc3339())),
+        "tp_weekly_pct": snap.third_party_weekly.as_ref().map(|w| w.utilization_pct),
+        "tp_weekly_reset": snap.third_party_weekly.as_ref().and_then(|w| w.resets_at.map(|dt| dt.to_rfc3339())),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Captured from a real `RetrieveUserQuotaSummary` response on 2026-07-22
+    /// (Antigravity 2.0 build 2.3.1, `agy` 1.1.5), then trimmed. Percentages
+    /// were edited to distinct non-zero values so a slot mix-up cannot pass.
+    const QUOTA_JSON: &str = r#"{
+      "response": {
+        "groups": [
+          {
+            "displayName": "Gemini Models",
+            "buckets": [
+              {"bucketId": "gemini-weekly", "displayName": "Weekly Limit",
+               "window": "weekly", "remainingFraction": 0.9191212,
+               "resetTime": "2026-07-28T17:39:58Z"},
+              {"bucketId": "gemini-5h", "displayName": "Five Hour Limit",
+               "window": "5h", "remainingFraction": 0.5672253,
+               "resetTime": "2026-07-22T17:47:00Z"}
+            ]
+          },
+          {
+            "displayName": "Claude and GPT models",
+            "buckets": [
+              {"bucketId": "3p-weekly", "window": "weekly",
+               "remainingFraction": 1, "resetTime": "2026-07-29T12:47:00Z"},
+              {"bucketId": "3p-5h", "window": "5h",
+               "remainingFraction": 0.25, "resetTime": "2026-07-22T17:47:00Z"}
+            ]
+          }
+        ]
+      }
+    }"#;
+
+    /// Fixed instant, earlier than every reset in the fixture. Using the wall
+    /// clock here would make the suite start failing once those resets pass.
+    fn now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-07-22T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn parsed() -> AntigravitySnapshot {
+        let v: serde_json::Value = serde_json::from_str(QUOTA_JSON).unwrap();
+        parse_quota_summary(&v, "Google AI Pro".into()).unwrap()
+    }
+
+    #[test]
+    fn quota_summary_maps_four_distinct_windows() {
+        let snap = parsed();
+        assert_eq!(snap.plan, "Google AI Pro");
+        // remainingFraction is inverted into "used".
+        assert_eq!(snap.session.utilization_pct, 43);
+        assert_eq!(snap.weekly.utilization_pct, 8);
+        assert_eq!(
+            snap.third_party_session.as_ref().unwrap().utilization_pct,
+            75
+        );
+        assert_eq!(snap.third_party_weekly.as_ref().unwrap().utilization_pct, 0);
+    }
+
+    #[test]
+    fn each_window_keeps_its_own_reset_time() {
+        let snap = parsed();
+        let at = |s: &str| Some(DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc));
+        assert_eq!(snap.session.resets_at, at("2026-07-22T17:47:00Z"));
+        assert_eq!(snap.weekly.resets_at, at("2026-07-28T17:39:58Z"));
+        assert_eq!(
+            snap.third_party_weekly.as_ref().unwrap().resets_at,
+            at("2026-07-29T12:47:00Z")
+        );
+        // Regression: weekly must never be a copy of the 5h window.
+        assert_ne!(snap.session.resets_at, snap.weekly.resets_at);
+    }
+
+    #[test]
+    fn window_durations_match_their_bucket() {
+        let snap = parsed();
+        assert_eq!(snap.session.window_duration, chrono::Duration::hours(5));
+        assert_eq!(snap.weekly.window_duration, chrono::Duration::days(7));
+        assert_eq!(
+            snap.third_party_weekly.as_ref().unwrap().window_duration,
+            chrono::Duration::days(7)
+        );
+    }
+
+    #[test]
+    fn groups_are_matched_by_display_name_when_bucket_ids_change() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"response":{"groups":[
+              {"displayName":"Gemini Models","buckets":[
+                {"bucketId":"x1","window":"5h","remainingFraction":0.5,"resetTime":"2026-07-22T17:47:00Z"},
+                {"bucketId":"x2","window":"weekly","remainingFraction":0.9,"resetTime":"2026-07-28T17:39:58Z"}]},
+              {"displayName":"Claude and GPT models","buckets":[
+                {"bucketId":"y1","window":"5h","remainingFraction":0.0,"resetTime":"2026-07-22T17:47:00Z"}]}
+            ]}}"#,
+        )
+        .unwrap();
+        let snap = parse_quota_summary(&v, "Pro".into()).unwrap();
+        assert_eq!(snap.session.utilization_pct, 50);
+        assert_eq!(snap.weekly.utilization_pct, 10);
+        assert_eq!(snap.third_party_session.unwrap().utilization_pct, 100);
+        assert!(snap.third_party_weekly.is_none());
+    }
+
+    #[test]
+    fn duplicate_or_unclassified_buckets_cannot_overwrite_a_slot() {
+        let duplicate: serde_json::Value = serde_json::from_str(
+            r#"{"response":{"groups":[{"displayName":"Gemini Models","buckets":[
+              {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.9},
+              {"bucketId":"gemini-5h-copy","window":"5h","remainingFraction":0.1},
+              {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.8}
+            ]}]}}"#,
+        )
+        .unwrap();
+        let err = parse_quota_summary(&duplicate, "Pro".into()).unwrap_err();
+        assert!(err.to_string().contains("duplicate Gemini 5h"), "{err}");
+
+        // A future pool or cadence is ignored, not silently treated as the
+        // Claude/GPT 5h slot.
+        let unrelated: serde_json::Value = serde_json::from_str(
+            r#"{"response":{"groups":[
+              {"displayName":"Gemini Models","buckets":[
+                {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.9},
+                {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.8},
+                {"bucketId":"gemini-monthly","window":"monthly","remainingFraction":0.7}
+              ]},
+              {"displayName":"Future Models","buckets":[
+                {"bucketId":"future-5h","window":"5h","remainingFraction":0.1}
+              ]}
+            ]}}"#,
+        )
+        .unwrap();
+        let snap = parse_quota_summary(&unrelated, "Pro".into()).unwrap();
+        assert!(snap.third_party_session.is_none());
+        assert!(snap.third_party_weekly.is_none());
+    }
+
+    /// A drifted bucket must fail the parse rather than report a reassuring
+    /// "0% used" for a window whose real state is unknown.
+    #[test]
+    fn a_bucket_without_a_usable_fraction_is_rejected() {
+        for bad in [r#""oops""#, "null", "-0.01", "1.01"] {
+            let v: serde_json::Value = serde_json::from_str(&format!(
+                r#"{{"response":{{"groups":[{{"displayName":"Gemini Models","buckets":[
+                  {{"bucketId":"gemini-5h","window":"5h","remainingFraction":{bad}}},
+                  {{"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.9}}]}}]}}}}"#
+            ))
+            .unwrap();
+            let err = parse_quota_summary(&v, "Pro".into()).unwrap_err();
+            assert!(err.to_string().contains("gemini-5h"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn malformed_present_reset_is_rejected_instead_of_disabling_expiry() {
+        for bad in [serde_json::json!("not-a-time"), serde_json::json!(42)] {
+            let mut v: serde_json::Value = serde_json::from_str(QUOTA_JSON).unwrap();
+            v["response"]["groups"][0]["buckets"][0]["resetTime"] = bad;
+            let err = parse_quota_summary(&v, "Pro".into()).unwrap_err();
+            assert!(err.to_string().contains("resetTime"), "{err}");
+        }
+    }
+
+    #[test]
+    fn missing_gemini_buckets_is_an_error_not_a_zero_bar() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"response":{"groups":[]}}"#).unwrap();
+        assert!(parse_quota_summary(&v, "Pro".into()).is_err());
+    }
+
+    #[test]
+    fn cache_round_trip_preserves_every_window() {
+        let snap = parsed();
+        let bytes = serde_json::to_vec(&snap_to_json(&snap)).unwrap();
+        assert_eq!(parse_cache_at(&bytes, None, now()).unwrap(), snap);
+    }
+
+    /// A truncated payload must fail so the caller refetches. Defaulting the
+    /// missing field to 0 would serve a confident "0% used" for the rest of the
+    /// TTL — the fabricated-placeholder defect corrected in PR #26.
+    #[test]
+    fn a_truncated_cached_payload_is_rejected_not_zeroed() {
+        let full = snap_to_json(&parsed());
+        for missing in ["session_pct", "weekly_pct"] {
+            let mut v = full.clone();
+            v.as_object_mut().unwrap().remove(missing);
+            let bytes = serde_json::to_vec(&v).unwrap();
+            let err = parse_cache_at(&bytes, None, now()).unwrap_err();
+            assert!(err.to_string().contains(missing), "{missing}: {err}");
+        }
+        // A wholly empty object is not a zero-usage snapshot either.
+        assert!(parse_cache_at(b"{}", None, now()).is_err());
+    }
+
+    #[test]
+    fn cached_percentages_are_range_checked_before_narrowing() {
+        let full = snap_to_json(&parsed());
+        for (key, bad) in [
+            ("session_pct", serde_json::json!(-1)),
+            ("weekly_pct", serde_json::json!(101)),
+            ("session_pct", serde_json::json!(i64::MAX)),
+            ("tp_session_pct", serde_json::json!("75")),
+        ] {
+            let mut v = full.clone();
+            v[key] = bad;
+            let bytes = serde_json::to_vec(&v).unwrap();
+            let err = parse_cache_at(&bytes, None, now()).unwrap_err();
+            assert!(err.to_string().contains(key), "{key}: {err}");
+        }
+    }
+
+    #[test]
+    fn malformed_cached_reset_is_rejected_instead_of_served_for_a_week() {
+        let mut v = snap_to_json(&parsed());
+        v["session_reset"] = serde_json::json!("not-a-time");
+        let bytes = serde_json::to_vec(&v).unwrap();
+        let err = parse_cache_at(&bytes, None, now()).unwrap_err();
+        assert!(err.to_string().contains("session_reset"), "{err}");
+    }
+
+    /// With Antigravity closed the cache is served for up to `MAX_STALE`, but a
+    /// window whose reset has passed has since rolled over — the real figure is
+    /// back near zero while the payload still carries the old one. Serving that
+    /// would present a known-obsolete number as current.
+    #[test]
+    fn a_cache_past_its_reset_is_refused() {
+        let bytes = serde_json::to_vec(&snap_to_json(&parsed())).unwrap();
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+
+        // Before every reset: served.
+        assert!(parse_cache_at(&bytes, None, now()).is_ok());
+        // One second before the earliest (the two 5h windows, 17:47:00Z).
+        assert!(parse_cache_at(&bytes, None, at("2026-07-22T17:46:59Z")).is_ok());
+
+        // The reset instant itself already counts as rolled over.
+        let err = parse_cache_at(&bytes, None, at("2026-07-22T17:47:00Z")).unwrap_err();
+        assert!(err.to_string().contains("5h"), "{err}");
+
+        // Well past it — this is the reboot-with-nothing-running case.
+        assert!(parse_cache_at(&bytes, None, at("2026-07-23T09:00:00Z")).is_err());
+    }
+
+    /// The weekly windows outlive the 5-hour ones, so expiry must be reported
+    /// per window rather than assuming the shortest one speaks for all four.
+    #[test]
+    fn expiry_names_the_window_that_rolled_over() {
+        let mut snap = parsed();
+        // Drop the 5h windows so only the weeklies can expire.
+        snap.session.resets_at = None;
+        snap.third_party_session = None;
+        let bytes = serde_json::to_vec(&snap_to_json(&snap)).unwrap();
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+
+        // Past the 5h resets but before either weekly: still usable.
+        assert!(parse_cache_at(&bytes, None, at("2026-07-23T09:00:00Z")).is_ok());
+
+        // Past the Gemini weekly (28th) but not the third-party one (29th).
+        let err = parse_cache_at(&bytes, None, at("2026-07-28T18:00:00Z")).unwrap_err();
+        assert!(err.to_string().contains("Gemini weekly"), "{err}");
+    }
+
+    /// A window with no reset time is unknown, not expired.
+    #[test]
+    fn a_window_without_a_reset_never_expires() {
+        let mut snap = parsed();
+        for w in [&mut snap.session, &mut snap.weekly] {
+            w.resets_at = None;
+        }
+        snap.third_party_session = None;
+        snap.third_party_weekly = None;
+        let bytes = serde_json::to_vec(&snap_to_json(&snap)).unwrap();
+        let far_future = DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(parse_cache_at(&bytes, None, far_future).is_ok());
+    }
+
+    /// Switching Google accounts must not show the previous account's quota.
+    #[test]
+    fn a_cache_from_another_account_is_rejected() {
+        let mut snap = parsed();
+        snap.account = "acct:aaaa".into();
+        let bytes = serde_json::to_vec(&snap_to_json(&snap)).unwrap();
+
+        assert!(parse_cache_at(&bytes, Some("acct:bbbb"), now()).is_err());
+        assert_eq!(
+            parse_cache_at(&bytes, Some("acct:aaaa"), now()).unwrap(),
+            snap
+        );
+
+        // A payload written before the account was recorded is unattributable.
+        let mut legacy = snap_to_json(&snap);
+        legacy.as_object_mut().unwrap().remove("account");
+        let legacy = serde_json::to_vec(&legacy).unwrap();
+        assert!(parse_cache_at(&legacy, Some("acct:aaaa"), now()).is_err());
+    }
+
+    /// With no local server there is nothing to compare against — and nothing
+    /// is consuming quota either, so the last known figures still stand.
+    #[test]
+    fn an_unverifiable_cache_is_served_rather_than_discarded() {
+        let mut snap = parsed();
+        snap.account = "acct:aaaa".into();
+        let bytes = serde_json::to_vec(&snap_to_json(&snap)).unwrap();
+        assert_eq!(parse_cache_at(&bytes, None, now()).unwrap(), snap);
+    }
+
+    #[test]
+    fn account_key_fingerprints_rather_than_storing_the_address() {
+        let with = |email: &str| account_key(&serde_json::json!({"userStatus": {"email": email}}));
+        let a = with("someone@example.com");
+        assert!(!a.contains("someone"), "{a}");
+        assert!(!a.contains('@'), "{a}");
+        assert_eq!(a, with("someone@example.com"), "must be stable");
+        assert_ne!(a, with("other@example.com"));
+        // An unidentifiable response still compares equal to itself.
+        let unknown = account_key(&serde_json::json!({}));
+        assert_eq!(unknown, account_key(&serde_json::json!({"userStatus": {}})));
+        assert_ne!(unknown, a);
+    }
+
+    /// The third-party pool is genuinely optional — a plan without it caches a
+    /// null and must still read back, unlike the required Gemini windows.
+    #[test]
+    fn absent_third_party_windows_are_not_treated_as_corruption() {
+        let mut snap = parsed();
+        snap.third_party_session = None;
+        snap.third_party_weekly = None;
+        let bytes = serde_json::to_vec(&snap_to_json(&snap)).unwrap();
+        assert_eq!(parse_cache_at(&bytes, None, now()).unwrap(), snap);
+    }
+
+    #[test]
+    fn cache_round_trip_preserves_absent_third_party_windows() {
+        let mut snap = parsed();
+        snap.third_party_session = None;
+        snap.third_party_weekly = None;
+        let bytes = serde_json::to_vec(&snap_to_json(&snap)).unwrap();
+        assert_eq!(parse_cache_at(&bytes, None, now()).unwrap(), snap);
+    }
+
+    #[test]
+    fn pct_used_inverts_valid_fractions() {
+        assert_eq!(pct_used(1.0), 0);
+        assert_eq!(pct_used(0.0), 100);
+        assert_eq!(pct_used(0.5), 50);
+    }
+
+    #[test]
+    fn plan_falls_back_through_the_status_payload() {
+        let tier: serde_json::Value =
+            serde_json::from_str(r#"{"userStatus":{"userTier":{"name":"Google AI Pro"}}}"#)
+                .unwrap();
+        assert_eq!(plan_from_status(&tier), "Google AI Pro");
+
+        let plan_only: serde_json::Value = serde_json::from_str(
+            r#"{"userStatus":{"planStatus":{"planInfo":{"planName":"Pro"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(plan_from_status(&plan_only), "Pro");
+
+        let empty: serde_json::Value = serde_json::from_str("{}").unwrap();
+        assert_eq!(plan_from_status(&empty), DEFAULT_PLAN);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_net_parser_keeps_only_listening_rows() {
+        let listen = "   0: 0100007F:975B 00000000:0000 0A 00000000:00000000 \
+                      00:00000000 00000000  1000        0 123456 1 0000 100 0";
+        assert_eq!(parse_proc_net_line(listen), Some((38747, 123456)));
+
+        let established = "   1: 0100007F:975B 0100007F:A1B2 01 00000000:00000000 \
+                           00:00000000 00000000  1000        0 123457 1 0000 100 0";
+        assert_eq!(parse_proc_net_line(established), None);
+
+        assert_eq!(parse_proc_net_line("garbage"), None);
+    }
+
+    #[test]
+    fn explicit_address_comes_first_and_gets_a_scheme() {
+        assert_eq!(
+            candidate_bases_with(Some("127.0.0.1:1234"), vec![5678]),
+            vec![
+                "http://127.0.0.1:1234".to_string(),
+                "http://127.0.0.1:5678".to_string(),
+            ]
+        );
+        // Trailing slashes are trimmed.
+        assert_eq!(
+            candidate_bases_with(Some("127.0.0.1:1234/"), vec![5678]),
+            vec![
+                "http://127.0.0.1:1234".to_string(),
+                "http://127.0.0.1:5678".to_string(),
+            ]
+        );
+        // Duplicate base URL is omitted.
+        assert_eq!(
+            candidate_bases_with(Some("127.0.0.1:5678"), vec![5678]),
+            vec!["http://127.0.0.1:5678".to_string()]
+        );
+        // Duplicate discovered ports are omitted.
+        assert_eq!(
+            candidate_bases_with(None, vec![5678, 5678]),
+            vec!["http://127.0.0.1:5678".to_string()]
+        );
+        // An address that already carries a scheme is left alone.
+        assert_eq!(
+            candidate_bases_with(Some("https://host:9"), vec![]),
+            vec!["https://host:9".to_string()]
+        );
+    }
+
+    fn http(status: u16) -> AppError {
+        AppError::Http {
+            status,
+            body: String::new(),
+        }
+    }
+
+    /// A signed-out server is worth reporting even when a later candidate only
+    /// refused the connection — that is the whole point of probing on past the
+    /// first failure.
+    #[test]
+    fn an_auth_failure_outranks_later_transport_noise() {
+        let err = select_probe_error(vec![
+            http(401),
+            AppError::Transport("connection refused".into()),
+        ]);
+        assert!(matches!(err, AppError::Http { status: 401, .. }), "{err}");
+
+        let err = select_probe_error(vec![
+            AppError::Transport("connection refused".into()),
+            http(403),
+        ]);
+        assert!(matches!(err, AppError::Http { status: 403, .. }), "{err}");
+    }
+
+    /// The *first* actionable failure wins, so the explicit override's message
+    /// survives a second signed-out product further down the list.
+    #[test]
+    fn the_first_auth_failure_wins() {
+        let err = select_probe_error(vec![http(401), http(403)]);
+        assert!(matches!(err, AppError::Http { status: 401, .. }), "{err}");
+    }
+
+    /// With nothing actionable, the last failure stands in for "nothing
+    /// answered" — and stays transient, so the widget falls back silently
+    /// instead of shouting about a product that simply is not running.
+    #[test]
+    fn without_an_auth_failure_the_last_error_stands() {
+        let err = select_probe_error(vec![
+            AppError::Transport("first".into()),
+            http(500),
+            AppError::Transport("last".into()),
+        ]);
+        assert!(
+            matches!(&err, AppError::Transport(m) if m == "last"),
+            "{err}"
+        );
+        assert!(err.is_transient());
+    }
+
+    /// A 5xx is a server that answered but broke; the user cannot act on it, so
+    /// it must not outrank a later real failure the way a 401 does.
+    #[test]
+    fn a_server_error_is_not_treated_as_actionable() {
+        let err = select_probe_error(vec![http(500), http(401)]);
+        assert!(matches!(err, AppError::Http { status: 401, .. }), "{err}");
+    }
+
+    #[test]
+    fn no_candidates_at_all_yields_a_generic_error() {
+        let err = select_probe_error(Vec::new());
+        assert!(
+            err.to_string().contains("no local server answered"),
+            "{err}"
+        );
+    }
+
+    /// Verbatim from Go's `net/http`: this is what every Antigravity product's
+    /// HTTPS listener replies to the cleartext probe, so it is the tail of a
+    /// normal discovery run rather than a symptom.
+    fn tls_echo() -> AppError {
+        AppError::Http {
+            status: 400,
+            body: "Client sent an HTTP request to an HTTPS server.\n".into(),
+        }
+    }
+
+    /// The RPC listener is probed first, so whatever it said is the diagnosis.
+    /// The TLS port is reached only afterwards and always "fails", so without
+    /// demoting it, it overwrites the one error that came from the server the
+    /// user actually cares about.
+    #[test]
+    fn a_tls_echo_does_not_mask_what_the_rpc_listener_said() {
+        let err = select_probe_error(vec![
+            AppError::Http {
+                status: 500,
+                body: "GetUserStatus: internal".into(),
+            },
+            tls_echo(),
+        ]);
+        assert!(
+            matches!(&err, AppError::Http { status: 500, body } if body.contains("internal")),
+            "{err}"
+        );
+    }
+
+    /// The regression that motivated this: an `Http` is not transient, so an
+    /// echo standing in as "the last failure" costs the silent cache fallback
+    /// that `without_an_auth_failure_the_last_error_stands` exists to protect.
+    /// A product that is merely not serving RPC must stay quiet.
+    #[test]
+    fn a_tls_echo_does_not_cost_the_silent_fallback() {
+        let err = select_probe_error(vec![
+            AppError::Transport("connection refused".into()),
+            tls_echo(),
+        ]);
+        assert!(
+            matches!(&err, AppError::Transport(m) if m == "connection refused"),
+            "{err}"
+        );
+        assert!(
+            err.is_transient(),
+            "the echo must not make the run non-transient: {err}"
+        );
+    }
+
+    /// Demoted, not discarded. When the TLS listener is genuinely all that
+    /// answered, its reply is still better than a generic "nothing answered".
+    #[test]
+    fn a_tls_echo_still_stands_when_it_is_the_only_thing_that_answered() {
+        let err = select_probe_error(vec![tls_echo()]);
+        assert!(matches!(err, AppError::Http { status: 400, .. }), "{err}");
+    }
+
+    /// The demotion keys on the body, so the language server's own `400` — a
+    /// real complaint about a real request — keeps its normal rank.
+    #[test]
+    fn a_genuine_bad_request_is_not_mistaken_for_a_tls_echo() {
+        let err = select_probe_error(vec![
+            AppError::Http {
+                status: 400,
+                body: "unknown method GetUserStatus".into(),
+            },
+            tls_echo(),
+        ]);
+        assert!(
+            matches!(&err, AppError::Http { status: 400, body } if body.contains("unknown method")),
+            "{err}"
+        );
+    }
+
+    /// Ranking the echo last must not disturb the top of the order.
+    #[test]
+    fn an_auth_failure_still_outranks_a_tls_echo() {
+        let err = select_probe_error(vec![tls_echo(), http(401)]);
+        assert!(matches!(err, AppError::Http { status: 401, .. }), "{err}");
+    }
+
+    #[test]
+    fn every_discovered_port_is_probed_in_order() {
+        assert_eq!(
+            candidate_bases_with(None, vec![33875, 37435]),
+            vec![
+                "http://127.0.0.1:33875".to_string(),
+                "http://127.0.0.1:37435".to_string(),
+            ]
+        );
+    }
+
+    /// The server's port is drawn from the ephemeral range, so there is nothing
+    /// sensible to guess when discovery comes up empty. Probing a hardcoded
+    /// port would contact an unrelated process; callers get the "start
+    /// Antigravity or set ANTIGRAVITY_LS_ADDRESS" error instead.
+    #[test]
+    fn empty_discovery_yields_no_candidates() {
+        assert!(candidate_bases_with(None, vec![]).is_empty());
+        assert!(candidate_bases_with(Some(""), vec![]).is_empty());
+    }
+
+    #[test]
+    fn every_antigravity_product_is_recognised() {
+        // Antigravity 2.0 / IDE: a separate language_server child.
+        assert!(is_antigravity_process(
+            "language_server\n",
+            Some("/opt/antigravity/resources/bin/language_server")
+        ));
+        // agy CLI: embeds the RPC surface in its own process.
+        assert!(is_antigravity_process(
+            "agy\n",
+            Some("/home/u/.local/bin/agy")
+        ));
+        // Recognised by path even when the process name says nothing.
+        assert!(is_antigravity_process(
+            "node",
+            Some("/opt/antigravity/bin/helper")
+        ));
+        assert!(is_antigravity_process("antigravity", None));
+        assert!(is_antigravity_process("agy.exe", None));
+        assert!(is_antigravity_process("Antigravity.exe", None));
+        assert!(is_antigravity_process("language_server.exe", None));
+        assert!(is_antigravity_process(
+            "language_server_windows_x64.exe",
+            None
+        ));
+        assert!(is_antigravity_process(
+            "node.exe",
+            Some(r"C:\Users\u\AppData\Local\agy.exe")
+        ));
+    }
+
+    #[test]
+    fn unrelated_processes_are_not_probed() {
+        assert!(!is_antigravity_process("sshd", Some("/usr/sbin/sshd")));
+        assert!(!is_antigravity_process("node", Some("/usr/bin/node")));
+        // "legacy" ends in a substring of "/agy" but is not the CLI.
+        assert!(!is_antigravity_process("legacy", Some("/usr/bin/legacy")));
+        assert!(!is_antigravity_process("legacy.exe", None));
+        assert!(!is_antigravity_process("not-agy.exe", None));
+        assert!(!is_antigravity_process("", None));
+    }
+
+    #[test]
+    fn windows_process_names_decode_until_nul_and_tolerate_invalid_utf16() {
+        let mut raw: Vec<u16> = "agy.exe".encode_utf16().collect();
+        raw.extend([0, b'x' as u16]);
+        assert_eq!(decode_windows_process_name(&raw), "agy.exe");
+        assert_eq!(decode_windows_process_name(&[0xd800]), "�");
+        assert_eq!(decode_windows_process_name(&[]), "");
+    }
+
+    #[test]
+    fn windows_process_filter_keeps_only_antigravity_pids() {
+        let processes = vec![
+            (10, "agy.exe".to_string()),
+            (20, "language_server_windows_x64.exe".to_string()),
+            (30, "sshd.exe".to_string()),
+        ];
+        let pids = matching_windows_process_ids(&processes);
+        assert_eq!(pids, std::collections::HashSet::from([10, 20]));
+    }
+
+    #[test]
+    fn windows_listener_filter_joins_pid_loopback_and_port() {
+        let pids = std::collections::HashSet::from([10]);
+        let rows = [
+            WindowsTcpRow {
+                local_addr: [127, 0, 0, 1],
+                local_port: u32::from(59870u16.to_be()),
+                pid: 10,
+            },
+            WindowsTcpRow {
+                local_addr: [127, 0, 0, 1],
+                local_port: u32::from(59868u16.to_be()),
+                pid: 10,
+            },
+            WindowsTcpRow {
+                local_addr: [127, 0, 0, 1],
+                local_port: u32::from(59870u16.to_be()),
+                pid: 10,
+            },
+            WindowsTcpRow {
+                local_addr: [0, 0, 0, 0],
+                local_port: u32::from(50000u16.to_be()),
+                pid: 10,
+            },
+            WindowsTcpRow {
+                local_addr: [127, 0, 0, 1],
+                local_port: u32::from(50001u16.to_be()),
+                pid: 99,
+            },
+            WindowsTcpRow {
+                local_addr: [127, 0, 0, 1],
+                local_port: 0,
+                pid: 10,
+            },
+        ];
+        assert_eq!(matching_windows_ports(&pids, &rows), vec![59870, 59868]);
+    }
+
+    /// Antigravity 2.0 and an interactive `agy` session at once. Their port
+    /// pairs must not be flattened into one set: sorting all four descending
+    /// would put pid 20's TLS listener ahead of pid 10's RPC listener.
+    #[test]
+    fn windows_ports_from_two_products_keep_tls_listeners_last() {
+        let pids = std::collections::HashSet::from([10, 20]);
+        let row = |port: u16, pid: u32| WindowsTcpRow {
+            local_addr: [127, 0, 0, 1],
+            local_port: u32::from(port.to_be()),
+            pid,
+        };
+        let rows = [
+            row(40000, 10),
+            row(40001, 10),
+            row(50000, 20),
+            row(50001, 20),
+        ];
+        assert_eq!(
+            matching_windows_ports(&pids, &rows),
+            vec![40001, 50001, 40000, 50000]
+        );
+    }
+
+    /// The high-to-low preference only means something per product, so the
+    /// grouping is what keeps a second product's TLS listener from being
+    /// probed before the first product's RPC listener.
+    #[test]
+    fn probe_order_puts_every_rpc_listener_ahead_of_every_tls_listener() {
+        use std::collections::BTreeMap;
+
+        // One process, the ordinary case: RPC (higher) before TLS (lower).
+        assert_eq!(
+            probe_order(BTreeMap::from([(10, vec![59868, 59870])])),
+            vec![59870, 59868]
+        );
+        // Two products. A plain descending sort would yield 50001, 50000,
+        // 40001, 40000 and reach pid 20's TLS listener second; taking the
+        // ports rank by rank leaves both TLS listeners at the back, where they
+        // are touched only if no RPC listener answered.
+        assert_eq!(
+            probe_order(BTreeMap::from([
+                (10, vec![40000, 40001]),
+                (20, vec![50000, 50001]),
+            ])),
+            vec![40001, 50001, 40000, 50000]
+        );
+        // Uneven groups: the extra port of the deeper group trails everything
+        // it ranks below, and a port claimed by two pids is probed once.
+        assert_eq!(
+            probe_order(BTreeMap::from([
+                (10, vec![6000, 5000, 4000]),
+                (20, vec![6000, 7000]),
+            ])),
+            vec![6000, 7000, 5000, 4000]
+        );
+        assert!(probe_order(BTreeMap::new()).is_empty());
+    }
+
+    /// A dual-stack bind names the same port from both `/proc/net/tcp` and
+    /// `tcp6`. Those rows are one listener, so they must not consume two ranks
+    /// and push the product's real second listener down past another
+    /// product's.
+    #[test]
+    fn a_port_named_twice_by_one_product_still_occupies_one_rank() {
+        use std::collections::BTreeMap;
+
+        assert_eq!(
+            probe_order(BTreeMap::from([
+                (10, vec![40001, 40001, 40000, 40000]),
+                (20, vec![50001, 50000]),
+            ])),
+            vec![40001, 50001, 40000, 50000],
+            "duplicate rows must not reorder the ranks below them"
+        );
+    }
+
+    /// The ordering rests on each product showing both listeners. A product
+    /// caught mid-startup, with only its TLS port bound, sits alone at rank 0
+    /// and is probed first — documented as the known cost, and harmless
+    /// because every candidate is probed anyway.
+    #[test]
+    fn a_half_started_product_is_the_documented_exception() {
+        use std::collections::BTreeMap;
+
+        assert_eq!(
+            probe_order(BTreeMap::from([
+                (10, vec![40000]),
+                (20, vec![50001, 50000])
+            ])),
+            vec![40000, 50001, 50000]
+        );
+    }
+
+    /// `ANTIGRAVITY_LS_ADDRESS` is user input. An entry that leaves no
+    /// authority to connect to is dropped instead of probed, so it can neither
+    /// spend a round-trip nor add a failure that competes with the real one in
+    /// [`select_probe_error`].
+    #[test]
+    fn an_override_with_no_authority_is_dropped_not_probed() {
+        for junk in ["/", "///", "http://", "https://", "  /  "] {
+            assert_eq!(
+                candidate_bases_with(Some(junk), vec![4242]),
+                vec!["http://127.0.0.1:4242".to_string()],
+                "{junk:?} should not survive as a candidate"
+            );
+        }
+        assert!(candidate_bases_with(Some("/"), vec![]).is_empty());
+    }
+
+    #[test]
+    fn windows_table_bounds_reject_truncation_and_overflow() {
+        assert_eq!(checked_windows_row_count(52, 4, 24, 2), Some(2));
+        assert_eq!(checked_windows_row_count(51, 4, 24, 2), None);
+        assert_eq!(checked_windows_row_count(4, 4, 24, 0), Some(0));
+        assert_eq!(checked_windows_row_count(52, 4, 0, 2), None);
+        assert_eq!(
+            checked_windows_row_count(usize::MAX, 4, 24, usize::MAX),
+            None
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_tcp_table_parser_copies_complete_rows_only() {
+        use std::mem::{offset_of, size_of};
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
+        };
+
+        let offset = offset_of!(MIB_TCPTABLE_OWNER_PID, table);
+        let used = offset + 2 * size_of::<MIB_TCPROW_OWNER_PID>();
+        let words = used.div_ceil(size_of::<u32>());
+        let mut buffer = vec![0u32; words];
+        let first = MIB_TCPROW_OWNER_PID {
+            dwLocalAddr: u32::from_ne_bytes([127, 0, 0, 1]),
+            dwLocalPort: u32::from(59868u16.to_be()),
+            dwOwningPid: 10,
+            ..Default::default()
+        };
+        let second = MIB_TCPROW_OWNER_PID {
+            dwLocalAddr: u32::from_ne_bytes([127, 0, 0, 1]),
+            dwLocalPort: u32::from(59870u16.to_be()),
+            dwOwningPid: 10,
+            ..Default::default()
+        };
+        unsafe {
+            buffer.as_mut_ptr().write_unaligned(2);
+            let rows = buffer
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(offset)
+                .cast::<MIB_TCPROW_OWNER_PID>();
+            rows.write_unaligned(first);
+            rows.add(1).write_unaligned(second);
+        }
+
+        assert_eq!(
+            parse_windows_tcp_rows(&buffer, used),
+            vec![
+                WindowsTcpRow {
+                    local_addr: [127, 0, 0, 1],
+                    local_port: u32::from(59868u16.to_be()),
+                    pid: 10,
+                },
+                WindowsTcpRow {
+                    local_addr: [127, 0, 0, 1],
+                    local_port: u32::from(59870u16.to_be()),
+                    pid: 10,
+                },
+            ]
+        );
+        assert!(parse_windows_tcp_rows(&buffer, used - 1).is_empty());
+    }
+
+    #[test]
+    fn lsof_parser_keeps_only_ports_owned_by_antigravity_processes() {
+        // `agy` (pid 74101) has three listening sockets; `sshd` (pid 200) has
+        // one that must be excluded even though it sorts right after `c`.
+        let output = "p74101\ncagy\nf10\nn127.0.0.1:8829\nf11\nn127.0.0.1:61289\nf12\nn127.0.0.1:61290\np200\ncsshd\nf5\nn*:22\n";
+        assert_eq!(parse_lsof_pcn(output), vec![61290, 61289, 8829]);
+    }
+
+    /// The pid on each `p` line has to survive to the `n` lines, or the ports
+    /// of two running products collapse into one group and rank ordering can
+    /// no longer keep the TLS listeners last.
+    #[test]
+    fn lsof_parser_keeps_each_products_ports_in_its_own_group() {
+        let output = concat!(
+            "p100\ncagy\nf3\nn127.0.0.1:40000\nf4\nn127.0.0.1:40001\n",
+            "p200\nclanguage_server\nf5\nn127.0.0.1:50000\nf6\nn127.0.0.1:50001\n",
+        );
+        assert_eq!(
+            parse_lsof_pcn(output),
+            vec![40001, 50001, 40000, 50000],
+            "both HTTP listeners must precede both TLS listeners"
+        );
+    }
+
+    #[test]
+    fn lsof_parser_matches_the_capitalised_macos_app_name() {
+        let output = "p900\ncAntigravity\nf7\nn127.0.0.1:54321\n";
+        assert_eq!(parse_lsof_pcn(output), vec![54321]);
+    }
+
+    #[test]
+    fn lsof_parser_deduplicates_and_handles_empty_output() {
+        let output = "p1\ncagy\nf3\nn127.0.0.1:9000\nf4\nn127.0.0.1:9000\n";
+        assert_eq!(parse_lsof_pcn(output), vec![9000]);
+        assert!(parse_lsof_pcn("").is_empty());
+    }
+
+    /// First run with Antigravity closed: no cache to serve, so the user must
+    /// be told what to start — not "no usable cache", which says nothing.
+    #[test]
+    fn missing_cache_surfaces_the_diagnosis_not_a_cache_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::at(dir.path().join("usage.json"));
+        let reason = AppError::Credentials("Antigravity: no local language server found".into());
+
+        let err = fallback_with_error(&cache, None, reason, now()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no local language server found"), "{msg}");
+        assert!(!msg.contains("no usable cache"), "{msg}");
+    }
+
+    #[test]
+    fn unusable_cache_does_not_replace_the_live_diagnosis() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::at(dir.path().join("antigravity"));
+        cache.write_payload(b"{}").unwrap();
+
+        let reason = AppError::Credentials("Antigravity must be running".into());
+        let err = fallback_with_error(&cache, None, reason, now()).unwrap_err();
+        assert!(err.to_string().contains("must be running"), "{err}");
+
+        let original = AppError::Transport("original loopback failure".into());
+        let err = fallback_silent(&cache, now(), original).unwrap_err();
+        assert!(
+            err.to_string().contains("original loopback failure"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_error_bodies_are_bounded_too() {
+        let mut server = mockito::Server::new_async().await;
+        let path = format!("/{STATUS_RPC}");
+        server
+            .mock("POST", path.as_str())
+            .with_status(500)
+            .with_body("x".repeat(crate::vendor::MAX_BODY_BYTES + 1))
+            .create_async()
+            .await;
+
+        let err = post_rpc(&reqwest::Client::new(), &server.url(), None, STATUS_RPC)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "{err}");
+    }
+
+    #[test]
+    fn blank_override_falls_through_to_discovery() {
+        assert_eq!(
+            candidate_bases_with(Some("   "), vec![4242]),
+            vec!["http://127.0.0.1:4242".to_string()]
+        );
+    }
+}
