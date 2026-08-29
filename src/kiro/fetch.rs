@@ -270,7 +270,7 @@ fn read_persisted_oauth(cache: &Cache, account: &str) -> Result<Option<Persisted
     let persisted: PersistedOAuth = serde_json::from_slice(&bytes).map_err(|e| {
         AppError::Credentials(format!(
             "ai-usagebar's cached Kiro credentials at {} are malformed ({e}); remove that file and try again",
-            path.display()
+            crate::display::sanitize_untrusted_path(&path)
         ))
     })?;
     if persisted.account != account {
@@ -279,7 +279,7 @@ fn read_persisted_oauth(cache: &Cache, account: &str) -> Result<Option<Persisted
     if persisted.access_token.trim().is_empty() || persisted.refresh_token.trim().is_empty() {
         return Err(AppError::Credentials(format!(
             "ai-usagebar's cached Kiro credentials at {} are incomplete; remove that file and try again",
-            path.display()
+            crate::display::sanitize_untrusted_path(&path)
         )));
     }
     Ok(Some(persisted))

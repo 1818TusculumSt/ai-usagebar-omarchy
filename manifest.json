@@ -27,7 +27,7 @@
     "defaults": {
       "provider": "",
       "refreshIntervalSec": 300,
-      "showRemaining": false
+      "showRemaining": true
     },
     "schema": [
       {
@@ -50,8 +50,8 @@
         "key": "showRemaining",
         "type": "boolean",
         "label": "Show remaining",
-        "description": "Show what is left of each window in the bar tiles (kmi 62%) instead of the used percentage (kmi 38%). Off by default.",
-        "defaultValue": false
+        "description": "Show what is left of each window in the bar tiles (kmi 62%) instead of the used percentage (kmi 38%). On by default.",
+        "defaultValue": true
       }
     ]
   }

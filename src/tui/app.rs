@@ -718,23 +718,6 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 crate::kiro::fetch_snapshot(client, &db_path, &cache, DEFAULT_TTL).await?;
             Ok(outcome.into())
         }
-        VendorId::NousResearch => {
-            let store = crate::nous::credentials::CredentialStore::default();
-            let endpoints = crate::nous::fetch::Endpoints::default();
-            let account = crate::nous::fetch::fetch_account_with_refresh(
-                client,
-                &store,
-                &endpoints,
-                Utc::now(),
-            )
-            .await?;
-            Ok(crate::vendor::VendorOutcome {
-                snapshot: crate::usage::VendorSnapshot::NousResearch(account),
-                stale: false,
-                last_error: None,
-                cache_age: Some(Duration::ZERO),
-            })
-        }
         VendorId::OpenCodeGo => {
             let api_key = crate::config::resolve_api_key(
                 "OpenCode Go",

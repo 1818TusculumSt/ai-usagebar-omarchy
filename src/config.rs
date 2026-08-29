@@ -57,7 +57,6 @@ pub struct Config {
     pub cursor: CursorConfig,
     pub minimax: MinimaxConfig,
     pub kiro: KiroConfig,
-    pub nous: NousConfig,
     #[serde(rename = "opencode-go")]
     pub opencode_go: OpenCodeGoConfig,
 }
@@ -525,12 +524,6 @@ impl Default for OpenAiConfig {
             admin_key_env: "OPENAI_ADMIN_KEY".to_string(),
         }
     }
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
-pub struct NousConfig {
-    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1359,14 +1352,14 @@ impl Config {
         let metadata = std::fs::metadata(path).map_err(|_| {
             AppError::Credentials(format!(
                 "config at {} contains inline api_key values but its permissions could not be checked; fix permissions or move keys to environment variables",
-                path.display()
+                crate::display::sanitize_untrusted_path(path)
             ))
         })?;
         if inline_key_permission_decision(metadata.mode()) == InlineKeyPermissionDecision::Tighten {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|_| {
                 AppError::Credentials(format!(
                     "config at {} contains inline api_key values but is group/other-readable and could not be tightened to 0600; fix permissions or move keys to environment variables",
-                    path.display()
+                    crate::display::sanitize_untrusted_path(path)
                 ))
             })?;
         }
@@ -1391,7 +1384,6 @@ impl Config {
             VendorId::Cursor => self.cursor.enabled,
             VendorId::Minimax => self.minimax.enabled,
             VendorId::Kiro => self.kiro.enabled,
-            VendorId::NousResearch => self.nous.enabled,
             VendorId::OpenCodeGo => self.opencode_go.enabled,
         }
     }
@@ -1825,7 +1817,6 @@ mod tests {
     #[test]
     fn new_provider_defaults_are_opt_in_and_use_exact_auth_contracts() {
         let config = Config::default();
-        assert!(!config.is_enabled(VendorId::NousResearch));
         assert!(!config.is_enabled(VendorId::OpenCodeGo));
         assert_eq!(config.opencode_go.api_key_env, "OPENCODE_GO_API_KEY");
         assert!(config.opencode_go.api_key.is_none());

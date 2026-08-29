@@ -155,28 +155,6 @@ pub enum Command {
         #[command(subcommand)]
         action: SettingsAction,
     },
-
-    /// Authenticate a provider without starting the widget.
-    Auth {
-        #[command(subcommand)]
-        provider: AuthProvider,
-    },
-}
-
-#[derive(clap::Subcommand, Debug, Clone)]
-pub enum AuthProvider {
-    Nous {
-        #[command(subcommand)]
-        action: NousAuthAction,
-    },
-}
-
-#[derive(clap::Subcommand, Debug, Clone)]
-pub enum NousAuthAction {
-    /// Start the Nous Research OAuth device flow.
-    Login,
-    /// Remove only the Nous Research credential.
-    Logout,
 }
 
 #[derive(clap::Subcommand, Debug, Clone)]
@@ -300,8 +278,6 @@ pub enum Vendor {
     Cursor,
     Minimax,
     Kiro,
-    #[value(name = "nous")]
-    NousResearch,
     #[value(name = "opencode-go")]
     OpenCodeGo,
 }
@@ -329,7 +305,6 @@ impl Vendor {
             Vendor::Cursor => crate::vendor::VendorId::Cursor,
             Vendor::Minimax => crate::vendor::VendorId::Minimax,
             Vendor::Kiro => crate::vendor::VendorId::Kiro,
-            Vendor::NousResearch => crate::vendor::VendorId::NousResearch,
             Vendor::OpenCodeGo => crate::vendor::VendorId::OpenCodeGo,
         })
     }
@@ -419,7 +394,6 @@ fn id_to_vendor(id: crate::vendor::VendorId) -> Vendor {
         crate::vendor::VendorId::Cursor => Vendor::Cursor,
         crate::vendor::VendorId::Minimax => Vendor::Minimax,
         crate::vendor::VendorId::Kiro => Vendor::Kiro,
-        crate::vendor::VendorId::NousResearch => Vendor::NousResearch,
         crate::vendor::VendorId::OpenCodeGo => Vendor::OpenCodeGo,
     }
 }
@@ -468,13 +442,9 @@ mod tests {
     }
 
     #[test]
-    fn new_vendor_values_and_auth_commands_parse_exactly() {
-        let nous = Cli::parse_from(["ai-usagebar-omarchy", "--vendor", "nous"]);
-        assert_eq!(nous.vendor, Some(Vendor::NousResearch));
+    fn opencode_go_vendor_value_parses_exactly() {
         let opencode = Cli::parse_from(["ai-usagebar-omarchy", "--vendor", "opencode-go"]);
         assert_eq!(opencode.vendor, Some(Vendor::OpenCodeGo));
-        let login = Cli::parse_from(["ai-usagebar-omarchy", "auth", "nous", "login"]);
-        assert!(matches!(login.command, Some(Command::Auth { .. })));
     }
 
     #[test]

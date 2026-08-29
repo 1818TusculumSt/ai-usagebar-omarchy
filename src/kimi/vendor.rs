@@ -182,6 +182,25 @@ fn render_tooltip(
     // this block used to print bare `26 / 100  (26%)` pairs. The percentage is
     // right there — project each quota onto a window and it draws like every
     // other vendor, with the counts riding along on the reset line.
+    // Session-then-weekly order, matching every other vendor's tooltip.
+    if snap.window_limit > 0 {
+        lines.push(TooltipLine::Body("".into()));
+        let window_detail = format!(
+            "{used} / {limit} · {remaining} left",
+            used = snap.window_used,
+            limit = snap.window_limit,
+            remaining = snap.window_remaining
+        );
+        push_window_with_row(
+            &mut lines,
+            "  󰅁  Rolling window (5h)",
+            &window(snap.window_pct(), snap.window_reset_at, ROLLING_WINDOW),
+            theme,
+            now,
+            WindowRow::default().with_detail(&window_detail),
+        );
+    }
+
     lines.push(TooltipLine::Body("".into()));
     // `remaining` is the vendor's own number, not `limit - used`: `extract_block`
     // keeps both when the wire reports both. Dropping it would lose the figure a
@@ -200,24 +219,6 @@ fn render_tooltip(
         now,
         WindowRow::default().with_detail(&weekly_detail),
     );
-
-    if snap.window_limit > 0 {
-        lines.push(TooltipLine::Body("".into()));
-        let window_detail = format!(
-            "{used} / {limit} · {remaining} left",
-            used = snap.window_used,
-            limit = snap.window_limit,
-            remaining = snap.window_remaining
-        );
-        push_window_with_row(
-            &mut lines,
-            "  󰅁  Rolling window (5h)",
-            &window(snap.window_pct(), snap.window_reset_at, ROLLING_WINDOW),
-            theme,
-            now,
-            WindowRow::default().with_detail(&window_detail),
-        );
-    }
 
     if let Some((code, msg)) = outcome.last_error.as_ref() {
         let (label, icon, ecolor) = match warning_kind(*code, msg) {

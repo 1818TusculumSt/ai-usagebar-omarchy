@@ -354,7 +354,6 @@ pub enum VendorSnapshot {
     Cursor(CursorSnapshot),
     Minimax(MinimaxSnapshot),
     Kiro(KiroSnapshot),
-    NousResearch(crate::nous::types::AccountSnapshot),
     OpenCodeGo(crate::opencode_go::types::Usage),
 }
 

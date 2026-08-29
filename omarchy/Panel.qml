@@ -26,6 +26,20 @@ Panel {
   readonly property color quotaYellow: "#e5c07b"
   readonly property color quotaOrange: "#d08770"
   readonly property color track: Style.selectedFillFor(foreground, Color.accent)
+
+  // The ONE band palette shared by the bar tiles, the panel's metric rows,
+  // and the vertical severity dot — the surfaces can never fork.
+  function bandColor(band) {
+    if (band === "critical") return root.urgent
+    if (band === "high") return root.quotaOrange
+    if (band === "mid") return root.quotaYellow
+    if (band === "low") return root.quotaGreen
+    return root.foreground
+  }
+
+  // The worst usage band across READY entries — drives the vertical bar's
+  // severity dot (a broken account already flips the icon urgent).
+  readonly property string worstBand: Model.worstBand(visibleEntries)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool vertical: bar ? bar.vertical : false
 
@@ -47,10 +61,10 @@ Panel {
     Number(setting("refreshIntervalSec", 300)) || 300))
   readonly property string configuredProvider: String(setting("provider", "") || "").trim()
   readonly property string rememberedEntryId: String(setting("lastSelectedEntryId", "") || "").trim()
-  // The one remaining display toggle: tiles show the USED percentage by
-  // default; this flips them to what is LEFT of the window. (Tiling itself
-  // and showing the value are not optional anymore.)
-  readonly property bool showRemaining: Model.booleanSetting(setting("showRemaining", false), false)
+  // The one remaining display toggle: tiles show what is LEFT of each
+  // window by default; this flips them to the USED percentage. (Tiling
+  // itself and showing the value are not optional anymore.)
+  readonly property bool showRemaining: Model.booleanSetting(setting("showRemaining", true), true)
   readonly property var visibleEntries: Model.filteredEntries(entries, configuredProvider)
   // Panel tabs show only agents that actually read; unconfigured/broken
   // ones keep their status hint but no tab.
@@ -218,43 +232,46 @@ Panel {
     return Model.autoTextSafe(text)
   }
 
-  // The bar label as one model per Text item — each agent its own object,
-  // so per-agent styling is a plain color property (no rich-text CSS to
-  // fight with). [{text, color, separator}] with separators between tiles.
+  // The bar label as one model per Text item — each part its own object,
+  // so per-part styling is a plain color property (no rich-text CSS to
+  // fight with). Items carry {text, color, separator, role, bold}: role is
+  // "icon" / "tag" / "figure" / "sep" so BarWidget can space tile-internal
+  // parts tighter than tile boundaries; bold marks a critical figure for
+  // colorblind aid. A tile contributes its tag plus ONE part per window
+  // figure, each figure colored by its own remaining band.
   function barLabelModels() {
     var items = []
-    var push = function(text, color, separator) {
-      items.push({ text: text, color: color, separator: separator === true })
-    }
-    var classColor = function(remainingClass) {
-      if (remainingClass === "critical") return root.urgent
-      if (remainingClass === "high") return root.quotaOrange
-      if (remainingClass === "mid") return root.quotaYellow
-      if (remainingClass === "low") return root.quotaGreen
-      return root.foreground
+    var push = function(text, color, role, bold, separator) {
+      items.push({ text: text, color: color, separator: separator === true,
+        role: role || "", bold: bold === true })
     }
     if (vertical) {
-      push(alarming ? "󰅙" : "󰚩", alarming ? root.urgent : root.foreground)
+      push(alarming ? "󰅙" : "󰚩", alarming ? root.urgent : root.foreground, "icon")
       return items
     }
     if (visibleEntries.length === 0) {
       push(loading ? "󰚩  …" : (alarming ? "󰅙" : "󰚩"),
-        alarming ? root.urgent : root.foreground)
+        alarming ? root.urgent : root.foreground, "icon")
       return items
     }
     var working = []
     for (var i = 0; i < visibleEntries.length; i++)
       if (visibleEntries[i].status === "ready") working.push(visibleEntries[i])
     if (working.length === 0) {
-      push("󰅙", root.urgent)
+      push("󰅙", root.urgent, "icon")
       return items
     }
-    push("󰚩", alarming ? root.urgent : root.foreground)
+    push("󰚩", alarming ? root.urgent : root.foreground, "icon")
     for (var w = 0; w < working.length; w++) {
-      var tileText = Model.tileLabel(working[w], true, showRemaining, nowMs)
-      if (tileText === "") continue
-      if (items.length > 1) push("│", root.dim, true)
-      push(tileText, classColor(Model.tileRemainingClass(working[w])))
+      var parts = Model.tileParts(working[w], true, showRemaining, nowMs)
+      if (parts.length === 0) continue
+      if (items.length > 1) push("│", root.dim, "sep")
+      // The tag part is always neutral (theme foreground); only the window
+      // figures carry their own remaining-band class — critical ones also
+      // go bold so the alert survives color blindness.
+      for (var p = 0; p < parts.length; p++)
+        push(parts[p].text, root.bandColor(parts[p].cls),
+          p === 0 ? "tag" : "figure", parts[p].cls === "critical")
     }
     return items
   }
@@ -627,7 +644,15 @@ Panel {
   component MetricRow: Column {
     id: metricRow
     property var row: null
-    readonly property bool critical: row && row.severity === "critical"
+    // Window rows use the SAME remaining bands as the bar tiles; other
+    // metrics keep the Rust severity, whose critical still reads urgent.
+    readonly property string band: row && (row.window === "session" || row.window === "weekly")
+      ? Model.remainingClass(row.percent) : ""
+    readonly property bool critical: row
+      && (row.severity === "critical" || metricRow.band === "critical")
+    readonly property color tone: metricRow.band !== ""
+      ? root.bandColor(metricRow.band)
+      : (metricRow.critical ? root.urgent : root.foreground)
     readonly property string detailText: Model.metricDetail(row)
     readonly property string resetText: row ? Model.formatReset(row.reset_at, root.nowMs) : ""
 
@@ -639,7 +664,10 @@ Panel {
 
       Text {
         id: metricLabel
-        text: metricRow.row ? metricRow.row.label : ""
+        // The warning glyph rides the label so the alert survives color
+        // blindness — red alone is not the only channel.
+        text: metricRow.row
+          ? (metricRow.critical ? "󰀪 " : "") + metricRow.row.label : ""
         textFormat: Text.PlainText
         color: root.foreground
         font.family: root.fontFamily
@@ -656,7 +684,7 @@ Panel {
         text: metricRow.row && metricRow.row.value !== ""
           ? metricRow.row.value : (metricRow.row ? metricRow.row.percent + "%" : "")
         textFormat: Text.PlainText
-        color: metricRow.critical ? root.urgent : root.foreground
+        color: metricRow.tone
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         font.bold: true
@@ -682,10 +710,14 @@ Panel {
         height: meterTrack.height
         radius: meterTrack.radius
         width: meterTrack.width * root.clamp(metricRow.row ? metricRow.row.percent / 100 : 0, 0, 1)
-        color: metricRow.critical ? root.urgent : root.foreground
+        color: metricRow.tone
 
         Behavior on width {
           NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+        }
+
+        Behavior on color {
+          ColorAnimation { duration: 160 }
         }
       }
     }

@@ -27,10 +27,16 @@ const VENDOR_AUTH = [
 // for keys that were configured. Falls back to the legacy path so a config
 // written before this is still found.
 function configPath() {
-    const xdg = `${GLib.get_user_config_dir()}/ai-usagebar/config.toml`;
+    // Current layout first; the pre-rename directory is read as a fallback
+    // because the Rust binary one-time-migrates it away (a config written
+    // before the rename stays detectable until that migration ran).
+    const xdg = `${GLib.get_user_config_dir()}/ai-usagebar-omarchy/config.toml`;
     if (GLib.file_test(xdg, GLib.FileTest.EXISTS))
         return xdg;
-    return `${GLib.get_home_dir()}/.config/ai-usagebar/config.toml`;
+    const legacy = `${GLib.get_user_config_dir()}/ai-usagebar/config.toml`;
+    if (GLib.file_test(legacy, GLib.FileTest.EXISTS))
+        return legacy;
+    return xdg;
 }
 
 // Does the config have an uncommented api_key in [section]?
@@ -385,8 +391,9 @@ export default class AiUsageBarPrefs extends ExtensionPreferences {
                 } else if (v.kind === 'local') {
                     spawnArgvInTerminal([v.cli]);
                 } else {
-                    const tui = GLib.find_program_in_path('ai-usagebar-tui') ||
-                        `${GLib.get_home_dir()}/.cargo/bin/ai-usagebar-tui`;
+                    const tui = GLib.find_program_in_path('ai-usagebar-omarchy-tui') ||
+                        GLib.find_program_in_path('ai-usagebar-tui') ||
+                        `${GLib.get_home_dir()}/.cargo/bin/ai-usagebar-omarchy-tui`;
                     spawnArgvInTerminal([tui]);
                 }
                 GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 4, () => {

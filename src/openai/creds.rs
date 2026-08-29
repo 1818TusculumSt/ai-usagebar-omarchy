@@ -61,7 +61,7 @@ pub fn read_from(path: &Path) -> Result<AuthFile> {
     serde_json::from_str(&raw).map_err(|e| {
         AppError::Credentials(format!(
             "could not parse {}: {e}. Run `codex login` to re-authenticate.",
-            path.display()
+            crate::display::sanitize_untrusted_path(path)
         ))
     })
 }

@@ -53,7 +53,7 @@ rustPlatform.buildRustPackage {
       "$out/share/licenses/ai-usagebar-omarchy/LICENSE"
   ''
   + lib.optionalString stdenv.hostPlatform.isLinux ''
-    for program in ai-usagebar ai-usagebar-tui; do
+    for program in ai-usagebar-omarchy ai-usagebar-omarchy-tui; do
       wrapProgram "$out/bin/$program" \
         --prefix PATH : "${linuxRuntimePath}"
     done
@@ -63,7 +63,7 @@ rustPlatform.buildRustPackage {
     description = "Omarchy/Waybar widgets + TUI for tracking multi-provider AI plan usage";
     homepage = "https://github.com/KyleLee/ai-usagebar-omarchy";
     license = lib.licenses.mit;
-    mainProgram = "ai-usagebar";
+    mainProgram = "ai-usagebar-omarchy";
     platforms = [
       "x86_64-linux"
       "aarch64-linux"

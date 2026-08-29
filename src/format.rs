@@ -58,13 +58,6 @@ pub fn updated_at_hm(now: DateTime<Utc>, cache_age: Option<Duration>) -> String 
     }
 }
 
-pub fn updated_at_hms(now: DateTime<Utc>, cache_age: Option<Duration>) -> String {
-    match cache_age {
-        Some(age) => local_time_hms(now - chrono::Duration::from_std(age).unwrap_or_default()),
-        None => "—".to_string(),
-    }
-}
-
 /// Substitute every `{key}` in `template` with `values[key]`. Unknown keys
 /// are left as-is.
 ///

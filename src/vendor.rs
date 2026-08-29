@@ -124,8 +124,6 @@ pub enum VendorId {
     Cursor,
     Minimax,
     Kiro,
-    #[serde(rename = "nous")]
-    NousResearch,
     #[serde(rename = "opencode-go")]
     OpenCodeGo,
 }
@@ -149,7 +147,6 @@ impl VendorId {
             VendorId::Cursor => "cursor",
             VendorId::Minimax => "minimax",
             VendorId::Kiro => "kiro",
-            VendorId::NousResearch => "nous",
             VendorId::OpenCodeGo => "opencode-go",
         }
     }
@@ -175,7 +172,6 @@ impl VendorId {
             VendorId::Cursor => "Cursor",
             VendorId::Minimax => "MiniMax",
             VendorId::Kiro => "Kiro",
-            VendorId::NousResearch => "Nous Research",
             VendorId::OpenCodeGo => "OpenCode Go",
         }
     }
@@ -202,7 +198,6 @@ impl VendorId {
             VendorId::Cursor => "cur",
             VendorId::Minimax => "mmx",
             VendorId::Kiro => "kir",
-            VendorId::NousResearch => "nrs",
             VendorId::OpenCodeGo => "ocg",
         }
     }
@@ -225,7 +220,6 @@ impl VendorId {
             VendorId::Cursor,
             VendorId::Minimax,
             VendorId::Kiro,
-            VendorId::NousResearch,
             VendorId::OpenCodeGo,
         ]
     }
@@ -305,8 +299,6 @@ mod tests {
 
     #[test]
     fn new_vendor_contracts_keep_public_names_and_slugs() {
-        assert_eq!(VendorId::NousResearch.slug(), "nous");
-        assert_eq!(VendorId::NousResearch.display_name(), "Nous Research");
         assert_eq!(VendorId::OpenCodeGo.slug(), "opencode-go");
         assert_eq!(VendorId::OpenCodeGo.display_name(), "OpenCode Go");
         assert_eq!(

@@ -63,13 +63,19 @@ omarchy plugin remove ai-usagebar-omarchy
 - Bar tiles: every account that reads successfully is always shown side by
   side — the name you gave it (or the provider name for unnamed defaults),
   the 5h and weekly windows each with its own reset countdown
-  (`kimi-main 42%·2h 15%·2d`), and a per-account range color: green ≥50%
-  remaining, yellow <50%, orange <10%, red <5%. Not-yet-started windows show
-  `0%·-` so a missing timer never looks like a bug. Unconfigured or broken
-  accounts never tile the bar.
+  (`kimi-main 42%·2h 05m 15%·2d 3h`). Each figure is its own Text object colored
+  by ITS window's remaining band — green ≥50% remaining, yellow <50%,
+  orange <20%, red <5% — so a green 5h figure can sit beside an orange
+  weekly one; the tag always stays neutral (theme foreground, never changes
+  with usage), and a critical figure also goes bold so the alert survives
+  color blindness. Countdowns keep two components — minutes on the 5h
+  window, hours on the weekly one. Not-yet-started windows show `0%·-` so a
+  missing timer never looks like a bug. Unconfigured or broken accounts
+  never tile the bar; a vertical bar shows the icon with a small dot in the
+  worst band's color.
 - Panel: click the gear or press `s` to open the native QML settings page;
-  its one display toggle, **Show remaining instead of used**, flips tile
-  figures from used to what is left.
+  its one display toggle, **Show remaining instead of used** (on by
+  default), flips tile figures between what is left and what is used.
   `h`/`l` or Left/Right switches provider, `j`/`k` or Up/Down scrolls, `r`,
   Enter, or Space refreshes, Tab moves to the neighboring bar panel, and Esc
   closes.

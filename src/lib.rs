@@ -33,7 +33,6 @@ pub mod kimi;
 pub mod kiro;
 pub mod minimax;
 pub mod moonshot;
-pub mod nous;
 pub mod novita;
 pub mod openai;
 pub mod opencode_go;

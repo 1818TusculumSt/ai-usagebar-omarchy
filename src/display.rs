@@ -16,9 +16,11 @@ pub const MAX_UNTRUSTED_FIELD_CHARS: usize = 4 * 1024;
 /// BEL, DEL, and C1 controls) is removed. Invisible bidirectional markers and
 /// overrides are also removed so an untrusted label cannot visually reorder
 /// neighboring UI text. The result is capped by character, not byte, so UTF-8
-/// is never split.
+/// is never split. Token-shaped substrings are redacted last: some gateways
+/// echo a rejected credential back inside a 400/404 body, and that body is
+/// about to be persisted to `.last_error` and shown in a tooltip.
 pub fn sanitize_untrusted_field(value: &str) -> String {
-    value
+    let cleaned: String = value
         .chars()
         .filter_map(|ch| match ch {
             '\n' => Some('\n'),
@@ -27,7 +29,85 @@ pub fn sanitize_untrusted_field(value: &str) -> String {
             _ => Some(ch),
         })
         .take(MAX_UNTRUSTED_FIELD_CHARS)
-        .collect()
+        .collect();
+    redact_token_shapes(&cleaned)
+}
+
+/// Redact token-shaped substrings an upstream error body might echo back.
+///
+/// Covers the three shapes credentials actually arrive in: vendor key
+/// prefixes (`sk-…`, `sk-or-…`, `sk-ant-…`) with at least 8 following key
+/// characters, a `Bearer <token>` header value, and a bare opaque run of
+/// 32+ base64/hex characters (no hyphens or dots, so hyphenated model ids
+/// and dotted JWTs' segments stay legible). The diagnostic value of a
+/// key-shaped run is nil; its leak cost is a persisted file and a tooltip.
+pub fn redact_token_shapes(value: &str) -> String {
+    const REDACTED: &str = "[redacted]";
+    let chars: Vec<char> = value.chars().collect();
+    let mut out = String::with_capacity(value.len());
+    let mut i = 0;
+    let key_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let token_char = |c: char| {
+        c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | '+' | '/' | '=')
+    };
+    let opaque_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '_');
+    while i < chars.len() {
+        // `sk-<8+ key chars>` — the vendor key prefixes.
+        if chars[i] == 's'
+            && chars.get(i + 1) == Some(&'k')
+            && chars.get(i + 2) == Some(&'-')
+            && chars.get(i + 3).is_some_and(|&c| key_char(c))
+        {
+            let mut j = i + 3;
+            while j < chars.len() && key_char(chars[j]) {
+                j += 1;
+            }
+            if j - (i + 3) >= 8 {
+                out.push_str(REDACTED);
+                i = j;
+                continue;
+            }
+        }
+        // `Bearer <16+ token chars>`, case-insensitive on the scheme word.
+        if chars[i] == 'B' || chars[i] == 'b' {
+            let lower: String = chars[i..(i + 6).min(chars.len())]
+                .iter()
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            if lower == "bearer" {
+                let mut j = i + 6;
+                while j < chars.len() && chars[j] == ' ' {
+                    j += 1;
+                }
+                let token_start = j;
+                while j < chars.len() && token_char(chars[j]) {
+                    j += 1;
+                }
+                if token_start < j && j - token_start >= 16 {
+                    out.push_str("Bearer ");
+                    out.push_str(REDACTED);
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        // A bare opaque run: 32+ base64/hex-ish characters with no hyphen or
+        // dot — long hashes, raw base64 blobs, unprefixed key bodies.
+        if chars[i].is_ascii_alphanumeric() {
+            let mut j = i;
+            while j < chars.len() && opaque_char(chars[j]) {
+                j += 1;
+            }
+            if j - i >= 32 && !chars[i..j].contains(&'-') {
+                out.push_str(REDACTED);
+                i = j;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 /// One line of untrusted text on its way to a terminal or a log.
@@ -96,5 +176,58 @@ mod tests {
         let output = sanitize_untrusted_field(&input);
         assert_eq!(output.chars().count(), MAX_UNTRUSTED_FIELD_CHARS);
         assert!(output.chars().all(|ch| ch == 'é'));
+    }
+
+    /// Some gateways echo the rejected credential back inside a non-401/403
+    /// error body ("malformed Authorization: sk-ant-…"), and that body is
+    /// persisted to `.last_error` and rendered in tooltips. Key-shaped runs
+    /// must not survive the sanitize boundary — this is the LOW-1 hardening.
+    #[test]
+    fn redacts_token_shapes_an_error_body_might_echo() {
+        // Vendor key prefixes.
+        assert_eq!(
+            redact_token_shapes("bad key sk-ant-api03-AbCdEf1234567890 rejected"),
+            "bad key [redacted] rejected"
+        );
+        assert_eq!(
+            redact_token_shapes("invalid sk-or-v1-0123456789abcdef"),
+            "invalid [redacted]"
+        );
+        // A Bearer header value.
+        assert_eq!(
+            redact_token_shapes("Bearer abcdef1234567890abcdef1234567890 expired"),
+            "Bearer [redacted] expired"
+        );
+        // Bare opaque blobs: 32+ base64/hex with no hyphen or dot.
+        assert_eq!(
+            redact_token_shapes("request d41d8cd98f00b204e9800998ecf8427e failed"),
+            "request [redacted] failed"
+        );
+    }
+
+    /// The redaction must not eat legitimate diagnostics: hyphenated model
+    /// ids, dotted JWT segments, and ordinary words stay legible.
+    #[test]
+    fn redaction_spares_legible_diagnostics() {
+        assert_eq!(
+            redact_token_shapes("claude-3-5-sonnet-latest-20241022"),
+            "claude-3-5-sonnet-latest-20241022"
+        );
+        assert_eq!(
+            redact_token_shapes("rate limited, retry after 30s"),
+            "rate limited, retry after 30s"
+        );
+        // A short `sk-` fragment without key material is prose, not a key.
+        assert_eq!(redact_token_shapes("the sk- prefix"), "the sk- prefix");
+    }
+
+    /// The sanitize boundary itself applies the redaction, so every sink
+    /// (`.last_error` persistence, tooltips, report errors) inherits it.
+    #[test]
+    fn sanitize_field_redacts_as_well() {
+        let out = sanitize_untrusted_field(
+            "400: authorization sk-proj-AbCdEfGh1234567890 is malformed\nline2",
+        );
+        assert_eq!(out, "400: authorization [redacted] is malformed\nline2");
     }
 }

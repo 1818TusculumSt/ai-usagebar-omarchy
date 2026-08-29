@@ -9,6 +9,31 @@ Each release is also published at
 
 ## [Unreleased]
 
+### Removed
+
+- Nous Research support, in full: the OAuth device flow and its `auth nous
+  login|logout` CLI (the only UI entry was removed from the Omarchy settings
+  panel earlier), the vendor fetch/panel/Waybar rendering, the `[nous]`
+  config section, and its docs. An existing
+  `~/.config/ai-usagebar-omarchy/credentials.json` is left untouched —
+  remove it manually if you no longer want it. A stale `[nous]` section in
+  `config.toml` is now simply ignored.
+
+### Security
+
+- Untrusted text crossing the sanitize boundary now redacts token-shaped
+  substrings (`sk-…` keys, `Bearer …` values, 32+ opaque base64/hex runs).
+  This closes the residual risk of a gateway echoing a submitted key inside
+  a non-401/403 error body that then persisted to `.last_error` and showed
+  in a tooltip. Ordinary diagnostics (hyphenated model ids, dotted JWTs)
+  stay legible.
+- Seven `Credentials` error messages now render paths through the
+  sanitizing helper instead of raw `.display()`, matching every sibling
+  site (defense-in-depth; render sinks already sanitized again).
+- The cache `.stale` marker and `.fetch.lock` files are created mode 0600,
+  matching every other cache artifact (they are empty today; this closes
+  the trap for future content).
+
 ### Changed
 
 - The Omarchy bar label is now one Text object per account (icon, tiles,
@@ -134,6 +159,13 @@ Each release is also published at
 
 ### Fixed
 
+- Pre-rename binary-name fallout: the GNOME extension and the macOS menu bar
+  resolved only the legacy `ai-usagebar`/`ai-usagebar-tui` names (functional
+  solely on AUR installs via compatibility symlinks), and the GNOME prefs
+  page read the pre-rename config directory. Both now resolve the canonical
+  `ai-usagebar-omarchy(-tui)` names first with the legacy spellings as
+  fallback, the macOS config probe mirrors the Rust resolution order, and
+  the Nix package wraps and advertises the real binary names.
 - A bare `[zai]` key the gateway answers `当前用户不存在coding plan` ("this
   user has no coding plan") no longer dead-ends. Personal quota queries that
   fail with that marker degrade to the 7-day usage stats — the old GNOME

@@ -42,13 +42,17 @@ function resolveBinary(settings) {
     const configured = settings.get_string('binary-path');
     if (configured && GLib.file_test(configured, GLib.FileTest.IS_EXECUTABLE))
         return configured;
-    const onPath = GLib.find_program_in_path('ai-usagebar');
-    if (onPath)
-        return onPath;
-    const cargo = `${GLib.get_home_dir()}/.cargo/bin/ai-usagebar`;
-    if (GLib.file_test(cargo, GLib.FileTest.IS_EXECUTABLE))
-        return cargo;
-    return 'ai-usagebar';
+    // The canonical name first; the legacy short name still resolves on AUR
+    // installs, which ship a compatibility symlink.
+    for (const name of ['ai-usagebar-omarchy', 'ai-usagebar']) {
+        const onPath = GLib.find_program_in_path(name);
+        if (onPath)
+            return onPath;
+        const cargo = `${GLib.get_home_dir()}/.cargo/bin/${name}`;
+        if (GLib.file_test(cargo, GLib.FileTest.IS_EXECUTABLE))
+            return cargo;
+    }
+    return 'ai-usagebar-omarchy';
 }
 
 const Indicator = GObject.registerClass(

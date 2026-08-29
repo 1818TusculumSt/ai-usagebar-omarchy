@@ -295,7 +295,7 @@ Column {
     Toggle {
       width: parent.width
       label: "Show remaining instead of used"
-      description: "Bar tiles show the used percentage by default (kmi 38% · 2h). Turn this on to show what is left of each window instead (kmi 62% · 2h). Applies immediately."
+      description: "Bar tiles show what is LEFT of each window by default (kmi 62% · 2h 05m). Turn this off to show the used percentage instead (kmi 38% · 2h 05m). Applies immediately."
       checked: root.showRemaining
       foreground: root.foreground
       fontFamily: root.fontFamily
@@ -401,7 +401,7 @@ Column {
     }
     Text {
       width: parent.width
-      text: "One card per key; the name is the bar-tile tag. Z.AI: the site (z.ai/bigmodel.cn) is auto-detected from the account type; only team keys need the organization and project ids (bigmodel.cn console → F12 → Application → Local Storage). Kimi: region stays auto-detected — a name and a key are all it takes."
+      text: "One card per key; the account name is the bar-tile tag. Only Z.AI team keys need the two organization ids — everything else auto-detects."
       textFormat: Text.PlainText
       color: root.dim
       font.family: root.fontFamily
@@ -496,6 +496,19 @@ Column {
       color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
       borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, pendingRemove ? 0.35 : 0.10), 1)
       radius: Style.cornerRadius
+
+      // Provider accent bar — one glance tells a Z.AI card from a Kimi
+      // card before any text is read.
+      Rectangle {
+        width: 3
+        radius: 1.5
+        color: accountCard.modelData.vendor === "kimi" ? "#c678dd" : "#61afef"
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.topMargin: 6
+        anchors.bottomMargin: 6
+      }
 
       Column {
         id: accountColumn
@@ -780,6 +793,19 @@ Column {
       color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
       borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10), 1)
       radius: Style.cornerRadius
+
+      // Same provider accent as the saved cards, following the draft's own
+      // vendor (it does not change when another Add button is used).
+      Rectangle {
+        width: 3
+        radius: 1.5
+        color: draftCard.draftVendor === "kimi" ? "#c678dd" : "#61afef"
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.topMargin: 6
+        anchors.bottomMargin: 6
+      }
 
       Column {
         id: draftColumn

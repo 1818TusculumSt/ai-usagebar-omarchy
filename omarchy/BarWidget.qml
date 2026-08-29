@@ -58,9 +58,9 @@ BarWidget {
     if ("hostWidget" in target) target.hostWidget = root
   }
 
-  // Width follows OUR label row: the button's own text is hidden (each
-  // agent renders as its own Text item — one object, one color property,
-  // no rich-text CSS), so its width contribution is just the margins.
+  // Width follows OUR label row: the button's own text is hidden (each tile
+  // part renders as its own Text item — one object, one color property, no
+  // rich-text CSS), so its width contribution is just the margins.
   implicitWidth: vertical ? button.implicitWidth
     : Math.max(button.implicitWidth, labelRow.implicitWidth + 17)
   implicitHeight: button.implicitHeight
@@ -118,14 +118,32 @@ BarWidget {
     visible: labelRow.visible
   }
 
-  // One Text per agent (plus icon and separators): per-agent colors are a
-  // plain color property — no shared rich-text label whose spans can be
-  // dropped wholesale. Text items don't take the pointer, so hover, click
-  // and wheel keep reaching the WidgetButton underneath.
+  // Vertical bars have no width for figures: a small band-colored dot under
+  // the icon carries the worst usage state (errors already turn the icon
+  // urgent, so the dot only reflects READY accounts).
+  Rectangle {
+    visible: root.vertical && root.panelItem
+      && !root.panelItem.alarming && root.panelItem.worstBand !== ""
+    width: 5
+    height: 5
+    radius: 2.5
+    color: root.panelItem ? root.panelItem.bandColor(root.panelItem.worstBand) : "transparent"
+    anchors.horizontalCenter: parent.horizontalCenter
+    anchors.bottom: parent.bottom
+    anchors.bottomMargin: 3
+  }
+
+  // One Text per tile part — the account tag plus EACH window figure (5h,
+  // weekly) — so every figure takes its own color from its own remaining
+  // band; no shared rich-text label whose spans can be dropped wholesale.
+  // Spacing rides leftPadding per ROLE (sep > tag > figure) so a tile reads
+  // as one group and tile boundaries stay wider than intra-tile gaps.
+  // Text items don't take the pointer, so hover, click and wheel keep
+  // reaching the WidgetButton underneath.
   Row {
     id: labelRow
     anchors.centerIn: button
-    spacing: 6
+    spacing: 0
 
 
     Repeater {
@@ -137,8 +155,14 @@ BarWidget {
         color: modelData.color
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.bodySmall
+        // Critical figures go bold — the alert survives color blindness.
+        font.bold: modelData.bold === true
         renderType: Text.NativeRendering
         anchors.verticalCenter: parent.verticalCenter
+        leftPadding: modelData.role === "sep" ? 7
+          : modelData.role === "tag" ? 6
+          : modelData.role === "figure" ? 4 : 0
+        rightPadding: modelData.role === "sep" ? 7 : 0
       }
     }
   }

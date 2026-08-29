@@ -330,29 +330,41 @@ func progressAttr(pct: Int, width: Int, elapsed: Int?, menu: Bool = false,
 
 func resolveBinary(_ name: String) -> String? {
     let fm = FileManager.default
-    if name == "ai-usagebar" {
-        let configured = DEF.string(forKey: "binaryPath") ?? ""
-        if !configured.isEmpty, fm.isExecutableFile(atPath: configured) { return configured }
+    // Canonical post-rename name first; the pre-rename short name still
+    // resolves on installs that ship the compatibility symlink.
+    let candidates: [String]
+    if name.hasSuffix("-tui") {
+        candidates = ["ai-usagebar-omarchy-tui", "ai-usagebar-tui"]
+    } else {
+        candidates = ["ai-usagebar-omarchy", "ai-usagebar"]
+        if name == "ai-usagebar-omarchy" {
+            let configured = DEF.string(forKey: "binaryPath") ?? ""
+            if !configured.isEmpty, fm.isExecutableFile(atPath: configured) { return configured }
+        }
     }
     let home = NSHomeDirectory()
-    for c in ["\(home)/.cargo/bin/\(name)", "/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)"]
-    where fm.isExecutableFile(atPath: c) {
-        return c
+    for candidate in candidates {
+        for c in ["\(home)/.cargo/bin/\(candidate)", "/opt/homebrew/bin/\(candidate)", "/usr/local/bin/\(candidate)"]
+        where fm.isExecutableFile(atPath: c) {
+            return c
+        }
     }
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-    p.arguments = [name]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = FileHandle.nullDevice
-    do {
-        try p.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        let path = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !path.isEmpty && fm.isExecutableFile(atPath: path) { return path }
-    } catch {}
+    for candidate in candidates {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        p.arguments = [candidate]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do {
+            try p.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            let path = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !path.isEmpty && fm.isExecutableFile(atPath: path) { return path }
+        } catch {}
+    }
     return nil
 }
 
@@ -577,12 +589,18 @@ let VENDOR_AUTH: [VendorAuth] = [
 // The config file the Rust binary would actually read. On macOS
 // `directories::ProjectDirs` resolves to ~/Library/Application Support, so
 // checking only ~/.config reported "no key configured" for a key the binary
-// was happily using. Prefer the canonical location, fall back to the legacy
-// Unix path the docs have always shown (the binary accepts both).
+// was happily using. Mirror the Rust resolution order: the canonical
+// post-rename dir first, then the pre-rename spellings it migrates from
+// (Application Support/ai-usagebar and ~/.config/ai-usagebar).
 func configPathTOML() -> String {
-    let appSupport = "\(NSHomeDirectory())/Library/Application Support/ai-usagebar/config.toml"
-    if FileManager.default.fileExists(atPath: appSupport) { return appSupport }
-    return "\(NSHomeDirectory())/.config/ai-usagebar/config.toml"
+    let home = NSHomeDirectory()
+    let canonical = "\(home)/Library/Application Support/ai-usagebar-omarchy/config.toml"
+    if FileManager.default.fileExists(atPath: canonical) { return canonical }
+    let legacySupport = "\(home)/Library/Application Support/ai-usagebar/config.toml"
+    if FileManager.default.fileExists(atPath: legacySupport) { return legacySupport }
+    let canonicalConfig = "\(home)/.config/ai-usagebar-omarchy/config.toml"
+    if FileManager.default.fileExists(atPath: canonicalConfig) { return canonicalConfig }
+    return "\(home)/.config/ai-usagebar/config.toml"
 }
 
 func configHasApiKeyTOML(_ section: String) -> Bool {
@@ -1231,8 +1249,7 @@ func oauthScript(_ v: VendorAuth) -> String {
 }
 
 func openTuiInTerminal() {
-    let cargo = "\(NSHomeDirectory())/.cargo/bin/ai-usagebar-tui"
-    let tui = FileManager.default.isExecutableFile(atPath: cargo) ? cargo : "ai-usagebar-tui"
+    guard let tui = resolveBinary("ai-usagebar-omarchy-tui") else { return }
     runInTerminal("\"\(tui)\"\necho\nread -p \"Enter para fechar...\"")
 }
 
@@ -2033,7 +2050,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func openTui() {
-        guard let tui = resolveBinary("ai-usagebar-tui") else { return }
+        guard let tui = resolveBinary("ai-usagebar-omarchy-tui") else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         p.arguments = ["-e", "tell application \"Terminal\" to do script \"\(tui)\""]
@@ -2124,7 +2141,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func refresh() {
-        guard let bin = resolveBinary("ai-usagebar") else {
+        guard let bin = resolveBinary("ai-usagebar-omarchy") else {
             setError("ai-usagebar não encontrado (PATH / ~/.cargo/bin / homebrew)")
             return
         }
@@ -2551,7 +2568,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// `refresh()`; failures leave `lastAccountStatus` alone so a transient
     /// hiccup doesn't blank a working menu.
     func fetchAccountStatus() {
-        guard let bin = resolveBinary("ai-usagebar") else { return }
+        guard let bin = resolveBinary("ai-usagebar-omarchy") else { return }
         accountStatusFetchedAt = Date()
         accountStatusGeneration += 1
         let generation = accountStatusGeneration
@@ -2640,7 +2657,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// belongs in a background subprocess the user cannot see or answer.
     @objc func addAccount(_ sender: NSMenuItem) {
         guard let desktop = sender.representedObject as? Bool,
-              let bin = resolveBinary("ai-usagebar") else { return }
+              let bin = resolveBinary("ai-usagebar-omarchy") else { return }
         let alert = NSAlert()
         alert.messageText = desktop ? "Adicionar conta do Claude Desktop"
                                     : "Adicionar conta do Claude Code"
@@ -2744,7 +2761,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func runAccountSwitch(label: String, desktop: Bool, deleting: [String] = []) {
-        guard let bin = resolveBinary("ai-usagebar"), !accountSwitchInFlight else { return }
+        guard let bin = resolveBinary("ai-usagebar-omarchy"), !accountSwitchInFlight else { return }
         accountSwitchInFlight = true
         renderAccountMenus()
         let args = switchArgs(label: label, desktop: desktop, deleting: deleting)

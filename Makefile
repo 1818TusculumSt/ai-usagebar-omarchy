@@ -25,8 +25,6 @@ uninstall:
 	rm -f -- "$(DESTDIR)$(PREFIX)/bin/ai-usagebar-omarchy"
 	rm -f -- "$(DESTDIR)$(PREFIX)/bin/ai-usagebar-omarchy-tui"
 	rm -rf -- "$(DESTDIR)$(PREFIX)/share/ai-usagebar-omarchy"
-	rm -rf -- "$(DESTDIR)$(PREFIX)/share/doc/ai-usagebar"
-	rm -rf -- "$(DESTDIR)$(PREFIX)/share/licenses/ai-usagebar"
 
 # Deliberately NOT part of `install`: that target is what a Sway or GNOME user
 # runs to get the CLI, and dropping a plasmoid into /usr/share/plasma on a

@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-Omarchy Quattro 原生面板、Waybar 小组件与多标签 TUI，覆盖 **Claude**、**Codex/ChatGPT**、**Z.AI (GLM)**、**OpenRouter**、**DeepSeek**、**Kimi**、**Nous Research**、**OpenCode Go** 等多家 AI 编程服务的套餐用量。
+Omarchy Quattro 原生面板、Waybar 小组件与多标签 TUI，覆盖 **Claude**、**Codex/ChatGPT**、**Z.AI (GLM)**、**OpenRouter**、**DeepSeek**、**Kimi**、**OpenCode Go** 等多家 AI 编程服务的套餐用量。
 
 ai-usagebar-omarchy 最初是
 [`claudebar`](https://github.com/mryll/claudebar) 的 Rust 移植，保持即插即用兼容：保留了 claudebar 的 Pango 悬浮提示、Omarchy 主题探测与 flock 保护的 OAuth 刷新，同时扩展了更多供应商与可测试的 Rust 代码库。
@@ -13,8 +13,8 @@ ai-usagebar-omarchy 最初是
 
 - **Z.AI / BigModel 企业（团队）订阅密钥**：同一监控端点加 `?type=2` 与组织/项目请求头——按密钥配置计费类型即可，站点（z.ai / bigmodel.cn）自动检测。按量付费密钥自动降级为 7 天用量统计。
 - **Z.AI 与 Kimi 多账号**（`[[zai.accounts]]` / `[[kimi.accounts]]`）：每把密钥在任务栏有独立磁贴、在 TUI 有独立标签页、独立缓存——通过原生设置表单（添加/重命名/删除、逐卡 Apply）或在 `config.toml` 中管理。
-- **自定义显示名称**：命名账号的任务栏磁贴以你起的名字开头（`kimi-main 42%·2h 15%·2d`）；未命名则显示供应商名（`kimi 37%·2d`）。名字同时是 `--account <label>` 选择器。
-- **任务栏逐账号分级配色**：每个磁贴按剩余配额着色——绿色 ≥50%、黄色 <50%、橙色 <10%、红色 <5%——5 小时窗口与周窗口并排显示，各自带重置倒计时（`42%·2h 15%·2d`；未启动的窗口显示 `0%·-`）。
+- **自定义显示名称**：命名账号的任务栏磁贴以你起的名字开头（`kimi-main 42%·2h 05m 15%·2d 3h`）；未命名则显示供应商名（`kimi 37%·2d 5h`）。名字同时是 `--account <label>` 选择器。
+- **任务栏逐窗口分级配色**：5 小时与周窗口各自是独立的 Text 对象，按各自剩余量着色——绿色 ≥50%、黄色 <50%、橙色 <20%、红色 <5%——因此同一磁贴里绿色 5 小时图可以与橙色周图并存；账号标签恒为主题前景色，不随用量变化。各窗口带自己的重置倒计时（`42%·2h 05m 15%·2d 3h`；未启动的窗口显示 `0%·-`）。
 - 每供应商 Waybar 模块使用与 claudebar 相同的 JSON 结构和参数。
 - Omarchy Quattro 原生插件跟随 shell 主题，支持键盘导航、供应商切换、实时重置计时器与过期/错误状态。
 - `ai-usagebar-omarchy-tui` 启动即显示紧凑的供应商总览，每 60 秒刷新。导航支持侧栏、顶栏或隐藏供应商框。
@@ -90,20 +90,9 @@ Claude 与 Codex 复用官方 CLI 的 OAuth 凭据。其他供应商使用 API �
 | Google Antigravity | 本地 Antigravity 服务 | 需启用并保持 Antigravity 或交互式 `agy` 会话运行。 |
 | Cursor | 已有 Cursor IDE 或 `cursor-agent` 登录 | 需启用并登录一次。`cursor-agent` 为无头回退。 |
 | Kiro CLI | 已有 kiro-cli 登录 | 需启用并运行一次 `kiro-cli login`。ai-usagebar-omarchy 按需刷新会话。 |
-| Nous Research | OAuth 设备流 | 启用 `[nous]`，在 Omarchy 设置面板点击登录，或运行 `ai-usagebar-omarchy auth nous login`。凭据保存在独立平台配置目录（Linux 为 `~/.config/ai-usagebar-omarchy/credentials.json`）。 |
-| OpenCode Go | API 密钥（`OPENCODE_GO_API_KEY` 环境变量或配置） | 启用 `[opencode-go]`，在 Omarchy 设置面板输入密钥或设环境变量。 |
+| OpenCode Go | API 密钥（`OPENCODE_GO_API_KEY` 环境变量或配置） | 需启用，在 Omarchy 设置面板输入密钥或设环境变量。 |
 
-### Nous 额度与 OpenCode Go
-
-Nous 用量百分比只按订阅额度池计算：
-`(月度订阅额度 - 订阅剩余额度) / 月度订阅额度`。
-充值/购买额度不计入该百分比。当 Portal 上报时，悬浮提示与 TUI 将订阅额度、充值额度
-与总可用额度作为独立数值分别显示。
-
-Nous 登录是交互式的（设备码需在浏览器授权）。保持终端开启直至提示登录完成，然后
-刷新 Omarchy 面板。登录不读取 Hermes Agent 凭据。Unix 下新建凭据目录权限 `0700`，
-凭据与锁文件 `0600`；已存在的当前用户属主配置目录只要不可被组/其他用户写也可用。
-Windows 使用平台配置目录与继承的用户访问控制。
+### OpenCode Go
 
 OpenCode Go 使用官方用量端点及 `percent` 字段。密钥可通过原生设置面板输入；存储
 值经 stdin 传给 Rust 设置命令，绝不进入 QML 命令行参数。缓存条目绑定端点与密钥
@@ -259,7 +248,8 @@ ai-usagebar-omarchy-tui               # 在当前终端打开
 
 ## 原生桌面集成
 
-[Omarchy Quattro 插件](omarchy/README.md)是主前端：逐账号任务栏磁贴与分级配色、
+[Omarchy Quattro 插件](omarchy/README.md)是主前端：逐账号任务栏磁贴、
+逐窗口分级配色、
 原生设置表单、实时重置倒计时与过期/错误状态——控制与设置细节见其 README。
 
 ## Waybar 配置

@@ -23,10 +23,10 @@ assert.equal(manifest.barWidget.defaults.showProvider, undefined);
 assert.equal(manifest.barWidget.schema.find(row => row.key === 'showProvider'), undefined);
 assert.equal(manifest.barWidget.defaults.barTiled, undefined);
 assert.equal(manifest.barWidget.schema.find(row => row.key === 'barTiled'), undefined);
-assert.equal(manifest.barWidget.defaults.showRemaining, false);
+assert.equal(manifest.barWidget.defaults.showRemaining, true);
 const showRemainingSchema = manifest.barWidget.schema.find(row => row.key === 'showRemaining');
 assert.equal(showRemainingSchema.type, 'boolean');
-assert.equal(showRemainingSchema.defaultValue, false);
+assert.equal(showRemainingSchema.defaultValue, true);
 
 const barWidgetSource = fs.readFileSync(new URL('./BarWidget.qml', import.meta.url), 'utf8');
 assert.match(barWidgetSource, /^BarWidget\s*\{/m);
@@ -46,8 +46,8 @@ assert.match(panelSource, /SettingsView\s*\{/);
 assert.match(panelSource, /function\s+openSettings\s*\(/);
 assert.match(panelSource, /setting\("lastSelectedEntryId",\s*""\)/);
 assert.doesNotMatch(panelSource, /showProvider/);
-assert.match(panelSource, /setting\("showRemaining",\s*false\)/);
-assert.match(panelSource, /setting\("showRemaining",\s*false\)/);
+assert.match(panelSource, /setting\("showRemaining",\s*true\)/);
+assert.match(panelSource, /setting\("showRemaining",\s*true\)/);
 assert.match(panelSource, /onShowRemainingRequested/);
 assert.doesNotMatch(panelSource, /setting\("showValue"/);
 assert.doesNotMatch(panelSource, /setting\("barTiled"/);
@@ -266,9 +266,9 @@ const kimiTile = model.parseReport(JSON.stringify({entries: [{
      detail: '', severity: 'low', reset_at: resetAt2h, window: 'session'}
   ]}
 ]})).entries[0];
-assert.equal(model.tileLabel(kimiTile, true, false, tileNow), 'kimi 38%·2h');
+assert.equal(model.tileLabel(kimiTile, true, false, tileNow), 'kimi 38%·2h 5m');
 // showRemaining flips the figure to what is left of the same window.
-assert.equal(model.tileLabel(kimiTile, true, true, tileNow), 'kimi 62%·2h');
+assert.equal(model.tileLabel(kimiTile, true, true, tileNow), 'kimi 62%·2h 5m');
 // headline carries the winning metric's reset for the tile to use.
 assert.equal(model.headline(kimiTile).reset_at, resetAt2h);
 // An unstarted window (no reset) keeps the countdown slot with a dash.
@@ -280,7 +280,7 @@ const unstarted = model.parseReport(JSON.stringify({entries: [{
      detail: '', severity: 'mid', reset_at: resetAt2h, window: 'weekly'}
   ]}
 ]})).entries[0];
-assert.equal(model.tileLabel(unstarted, true, false, tileNow), 'kimi 0%·- 37%·2h');
+assert.equal(model.tileLabel(unstarted, true, false, tileNow), 'kimi 0%·- 37%·2h 5m');
 // Both windows tile, each with its own reset: 5h first, weekly second.
 const twoWindow = model.parseReport(JSON.stringify({entries: [{
   id: 'kimi', error: null, sections: [
@@ -290,8 +290,8 @@ const twoWindow = model.parseReport(JSON.stringify({entries: [{
      detail: '', severity: 'mid', reset_at: '2026-09-01T14:05:00Z', window: 'weekly'}
   ]}
 ]})).entries[0];
-assert.equal(model.tileLabel(twoWindow, true, false, tileNow), 'kimi 38%·2h 37%·3d');
-assert.equal(model.tileLabel(twoWindow, true, true, tileNow), 'kimi 62%·2h 63%·3d');
+assert.equal(model.tileLabel(twoWindow, true, false, tileNow), 'kimi 38%·2h 5m 37%·3d 2h');
+assert.equal(model.tileLabel(twoWindow, true, true, tileNow), 'kimi 62%·2h 5m 63%·3d 2h');
 // A reset in the past reads as due.
 const dueTile = model.parseReport(JSON.stringify({entries: [{
   id: 'zai', short_name: 'zai', error: null, sections: [
@@ -357,11 +357,76 @@ assert.equal(model.isAlarming(unconfiguredReport[2]), true);
   assert.equal(model.tileRemainingClass(mk(91, 15)), 'high');
   assert.equal(model.tileRemainingClass(mk(30, 96)), 'critical');
   assert.equal(model.tileRemainingClass(mk(50, 50)), 'low');
+
+  // Per-FIGURE classes: the tag is class-less (theme foreground — the key
+  // name never changes color with usage), then the 5h and weekly figures
+  // each carry their own band — 99% left of the 5h window (green) beside
+  // 48% left of the weekly one (yellow) in ONE tile.
+  // (Plain-copy first: parts live in the vm context, whose object prototype
+  // never deep-equals a host-realm literal.)
+  const plain = parts => {
+    const out = []
+    for (const p of parts) out.push({ text: p.text, cls: p.cls })
+    return out
+  };
+  assert.deepEqual(plain(model.tileParts(mk(1, 52), true, false, tileNow)), [
+    { text: 'a', cls: '' },
+    { text: '1%·2h 5m', cls: 'low' },
+    { text: '52%·2h 5m', cls: 'mid' }
+  ]);
+  // Band edges on remaining: 13% left → orange (high), 47% left → yellow.
+  assert.equal(model.remainingClass(87), 'high'); // 13% remaining
+  assert.equal(model.remainingClass(53), 'mid');  // 47% remaining
+  assert.equal(model.remainingClass(81), 'high'); // 19% remaining — orange's upper edge
+  assert.equal(model.remainingClass(80), 'mid');  // 20% remaining — back to yellow
+  // And the mirror: a critical 5h window beside a healthy weekly one —
+  // the split goes both ways, never one color for the whole key.
+  const mirror = plain(model.tileParts(mk(96, 8), true, false, tileNow));
+  assert.deepEqual(mirror[1], { text: '96%·2h 5m', cls: 'critical' });
+  assert.deepEqual(mirror[2], { text: '8%·2h 5m', cls: 'low' });
+  // tileLabel stays the joined form of the parts.
+  assert.equal(model.tileLabel(mk(1, 52), true, false, tileNow), 'a 1%·2h 5m 52%·2h 5m');
+  // showRemaining flips the figures; the classes stay remaining-based.
+  const flipped = plain(model.tileParts(mk(1, 52), true, true, tileNow));
+  assert.deepEqual(flipped[1], { text: '99%·2h 5m', cls: 'low' });
+  assert.deepEqual(flipped[2], { text: '48%·2h 5m', cls: 'mid' });
+  // Balance-style accounts keep the single headline part, class-less.
+  assert.deepEqual(plain(model.tileParts(model.parseReport(JSON.stringify({entries: [
+    {id: 'deepseek', error: null, sections: [
+      {type: 'text', label: 'Balance', value: '$8.42'}]}
+  ]})).entries[0], true, false, tileNow)), [
+    { text: 'deepseek', cls: '' },
+    { text: '$8.42', cls: '' }
+  ]);
+
+  // Two-component countdowns: the 5h window keeps its minutes, the weekly
+  // window its hours; a zero component is omitted rather than shown as 0.
+  assert.equal(model.compactReset('', tileNow), '');
+  assert.equal(model.compactReset('2026-08-29T11:00:00Z', tileNow), 'due');
+  assert.equal(model.compactReset('2026-08-29T12:40:00Z', tileNow), '40m');
+  assert.equal(model.compactReset('2026-08-29T13:00:00Z', tileNow), '1h');
+  assert.equal(model.compactReset('2026-08-29T14:05:00Z', tileNow), '2h 5m');
+  assert.equal(model.compactReset('2026-08-29T16:07:00Z', tileNow), '4h 7m');
+  assert.equal(model.compactReset('2026-08-30T12:00:00Z', tileNow), '1d');
+  assert.equal(model.compactReset('2026-09-01T14:05:00Z', tileNow), '3d 2h');
+
+  // The worst band across entries drives the vertical bar's severity dot;
+  // non-ready entries never contribute (the icon itself goes urgent there).
+  assert.equal(model.worstBand([]), '');
+  assert.equal(model.worstBand([mk(10, 5)]), 'low');
+  assert.equal(model.worstBand([mk(10, 5), mk(60, 5)]), 'mid');
+  assert.equal(model.worstBand([mk(1, 5), mk(60, 96)]), 'critical');
+  const brokenEntry = model.parseReport(JSON.stringify({entries: [
+    {id: 'kimi', error: 'HTTP 401', sections: []}
+  ]})).entries[0];
+  assert.equal(model.worstBand([brokenEntry, mk(10, 5)]), 'low');
 }
-// The bar renders ONE Text per agent (Panel.barLabelModels + BarWidget's
-// Repeater) — per-agent color is a plain color property, not shared rich
-// text whose spans a CSS quirk can drop wholesale (the all-white episode).
+// The bar renders ONE Text PER TILE PART (Panel.barLabelModels +
+// BarWidget's Repeater) — the tag and each window figure are separate
+// objects with their own color property, not shared rich text whose spans
+// a CSS quirk can drop wholesale (the all-white episode).
 assert.match(panelSource, /function barLabelModels\(\)/);
+assert.match(panelSource, /Model\.tileParts\(/);
 assert.match(barWidgetSource, /labelVisible: false/);
 assert.match(barWidgetSource, /keepSpace: true/);
 assert.match(barWidgetSource, /root\.panelItem\.barLabelModels\(\)/);

@@ -17,7 +17,7 @@ metrics expand to an empty string unless noted otherwise.
 | SuperGrok | `sgk` | Anthropic API | `aac` |
 | Antigravity | `agy` | Cursor | `cur` |
 | MiniMax | `mmx` | Kiro CLI | `kir` |
-| Nous Research | `nrs` | OpenCode Go | `ocg` |
+| OpenCode Go | `ocg` | | |
 
 The same codes ride the `ai-usagebar-omarchy usage --json` report as each entry's
 `short_name`, so a native frontend can draw a Waybar-style provider tag without

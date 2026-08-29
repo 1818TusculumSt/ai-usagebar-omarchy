@@ -169,10 +169,24 @@ impl Cache {
         Ok(())
     }
 
-    /// Mark the cache as stale. Idempotent.
+    /// Mark the cache as stale. Idempotent. Created 0600 like every other
+    /// file under the cache dir — the marker is empty today, but a future
+    /// edit that puts content in it must not inherit a world-readable mode.
     pub fn mark_stale(&self) {
         let _ = self.ensure_dir();
-        let _ = File::create(self.stale_path());
+        #[cfg(unix)]
+        let created = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(self.stale_path())
+        };
+        #[cfg(not(unix))]
+        let created = File::create(self.stale_path());
+        let _ = created;
     }
 
     pub fn is_stale(&self) -> bool {
@@ -247,11 +261,16 @@ pub fn acquire_lock(path: &Path, timeout: Duration) -> Result<LockGuard> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io_at(parent, e))?;
     }
-    let f = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
+    // The lock file's content is unused, but it is created 0600 like every
+    // other cache artifact so a future edit cannot inherit a loose mode.
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let f = options
         .open(path)
         .map_err(|e| AppError::io_at(path, e))?;
 
@@ -483,6 +502,48 @@ mod tests {
         assert_eq!(persisted, format!("403\n{AUTH_FAILURE_MESSAGE}"));
         assert!(!persisted.contains("PANCEA"));
         assert!(!persisted.contains("<credential>"));
+    }
+
+    /// LOW-1 hardening: a non-auth status body that ECHOES the submitted key
+    /// (some gateways quote a malformed `Authorization` in a 400) must not
+    /// persist the key. Ordinary diagnostic text around it survives.
+    #[test]
+    fn last_error_redacts_key_shapes_echoed_by_non_auth_bodies() {
+        let (_td, cache) = fixture();
+        let (_code, shown) = cache.write_last_error(
+            400,
+            "malformed Authorization: sk-ant-api03-AbCdEfGh1234567890; retry",
+        );
+
+        let persisted = fs::read_to_string(cache.last_error_path()).unwrap();
+        assert!(persisted.contains("400\n"), "{persisted}");
+        assert!(!persisted.contains("sk-ant-api03"), "{persisted}");
+        assert!(persisted.contains("malformed Authorization: [redacted]"), "{persisted}");
+        assert!(persisted.ends_with("retry"), "{persisted}");
+        // The returned pair (what tooltips show) matches what was persisted.
+        assert_eq!(shown, persisted.split_once('\n').unwrap().1);
+    }
+
+    /// The stale marker and the flock file are empty, but they are created
+    /// 0600 like every other cache artifact — a future edit that puts
+    /// content in them must not inherit a world-readable mode.
+    #[cfg(unix)]
+    #[test]
+    fn marker_files_are_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_td, cache) = fixture();
+        cache.mark_stale();
+        let stale_mode = fs::metadata(cache.stale_path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(stale_mode & 0o777, 0o600, "stale marker mode {stale_mode:o}");
+
+        let lock = cache.dir.join(".fetch.lock");
+        let _guard = acquire_lock(&lock, Duration::from_millis(100)).unwrap();
+        let lock_mode = fs::metadata(&lock).unwrap().permissions().mode();
+        assert_eq!(lock_mode & 0o777, 0o600, "lock file mode {lock_mode:o}");
     }
 
     /// The invariant that keeps the displayed message from drifting away from

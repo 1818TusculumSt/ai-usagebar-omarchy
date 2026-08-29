@@ -173,7 +173,6 @@ async fn build_output(cli: &Cli) -> Result<WaybarOutput> {
         Vendor::Cursor => cursor_output(cli, &config).await,
         Vendor::Minimax => minimax_output(cli, &config).await,
         Vendor::Kiro => kiro_output(cli, &config).await,
-        Vendor::NousResearch => nous_output(cli).await,
         Vendor::OpenCodeGo => opencode_go_output(cli, &config).await,
     }
 }
@@ -202,31 +201,6 @@ fn validate_vendor_options(cli: &Cli, vendor: Vendor) -> Result<()> {
 /// (such as Kimi). Unreachable for `all`, which never gets here.
 fn dispatch_is_eligible(cli: &Cli, config: &Config, vendor: Vendor) -> bool {
     cli.has_explicit_vendor() || vendor.to_id().is_some_and(|id| config.is_enabled(id))
-}
-
-/// Nous Research authenticates with the independent OAuth credential store.
-async fn nous_output(cli: &Cli) -> Result<WaybarOutput> {
-    let client = http_client()?;
-    let store = crate::nous::credentials::CredentialStore::default();
-    let endpoints = crate::nous::fetch::Endpoints::default();
-    let account =
-        crate::nous::fetch::fetch_account_with_refresh(&client, &store, &endpoints, Utc::now())
-            .await?;
-    let snapshot = account.clone();
-    let outcome = VendorOutcome {
-        snapshot: crate::usage::VendorSnapshot::NousResearch(account),
-        stale: false,
-        last_error: None,
-        cache_age: Some(Duration::ZERO),
-    };
-    let theme = theme_from_cli(cli);
-    Ok(crate::nous::vendor::render(
-        &outcome,
-        &snapshot,
-        &theme,
-        &RenderOpts::from_cli(cli),
-        Utc::now(),
-    ))
 }
 
 async fn opencode_go_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {

@@ -82,14 +82,14 @@ pub fn read_credentials(path: &Path) -> Result<KiroCredentials> {
     if !path.exists() {
         return Err(AppError::Credentials(format!(
             "Kiro CLI database not found at {}. Run `{LOGIN_HINT}`, then try again.",
-            path.display()
+            crate::display::sanitize_untrusted_path(path)
         )));
     }
     let conn =
         Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
             AppError::Credentials(format!(
                 "could not open Kiro CLI database at {}: {e}",
-                path.display()
+                crate::display::sanitize_untrusted_path(path)
             ))
         })?;
 

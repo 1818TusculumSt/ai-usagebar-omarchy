@@ -211,13 +211,6 @@ pub fn compact_cells(snapshot: &VendorSnapshot) -> (String, Vec<(String, PaceSev
             ],
         ),
         VendorSnapshot::Kiro(s) => (s.plan.clone(), vec![pct("credits", s.pct())]),
-        VendorSnapshot::NousResearch(s) => {
-            let cell = s
-                .usage_percent()
-                .map(|value| pct("usage", value.round().clamp(0.0, 100.0) as i32))
-                .unwrap_or_else(|| ("—".into(), PaceSeverity::Low));
-            (s.plan.clone().unwrap_or_default(), vec![cell])
-        }
         VendorSnapshot::OpenCodeGo(s) => {
             let cells = [
                 ("rolling", s.rolling.as_ref()),
@@ -275,9 +268,6 @@ pub fn headline_pct(snapshot: &VendorSnapshot) -> Option<i32> {
         VendorSnapshot::Cursor(s) => (!s.unlimited).then_some(s.total_pct),
         VendorSnapshot::Minimax(s) => Some(s.session.utilization_pct.max(s.weekly.utilization_pct)),
         VendorSnapshot::Kiro(s) => Some(s.pct()),
-        VendorSnapshot::NousResearch(s) => s
-            .usage_percent()
-            .map(|value| value.round().clamp(0.0, 100.0) as i32),
         VendorSnapshot::OpenCodeGo(s) => [
             s.rolling
                 .as_ref()
@@ -357,7 +347,6 @@ pub(crate) fn sections_with_metadata_for(
                 VendorSnapshot::Cursor(s) => cursor_sections(s, now),
                 VendorSnapshot::Minimax(s) => minimax_sections(s, now, pace_tolerance),
                 VendorSnapshot::Kiro(s) => kiro_sections(s, now),
-                VendorSnapshot::NousResearch(s) => nous_sections(s, now),
                 VendorSnapshot::OpenCodeGo(s) => opencode_go_sections(s, now),
             };
             // Inject the (already-absolute) fetched-at instant into the title
@@ -778,52 +767,6 @@ fn cursor_sections(s: &crate::usage::CursorSnapshot, now: DateTime<Utc>) -> Sect
     v
 }
 
-fn nous_sections(s: &crate::nous::types::AccountSnapshot, now: DateTime<Utc>) -> SectionBuilder {
-    let mut sections = SectionBuilder::new(vec![Section::Title {
-        left: "Nous Research".into(),
-        right: None,
-    }]);
-    if let Some(value) = s.usage_percent() {
-        let pct = value.round().clamp(0.0, 100.0) as i32;
-        sections.push_metric(
-            Section::Metric {
-                label: "Usage".into(),
-                pct: pct as u16,
-                severity: severity_for(pct),
-                value_label: format!("{pct}%"),
-                footnote: "current period".into(),
-            },
-            s.current_period_end,
-        );
-    }
-    sections.push(Section::Spacer);
-    if let Some(remaining) = s.credits_remaining {
-        sections.push(Section::Text {
-            label: "Subscription credits".into(),
-            value: format!("{remaining:.2} remaining"),
-        });
-    }
-    if let Some(purchased) = s.purchased_credits_remaining {
-        sections.push(Section::Text {
-            label: "Top-up credits".into(),
-            value: format!("{purchased:.2} remaining"),
-        });
-    }
-    if let Some(total_usable) = s.total_usable_credits {
-        sections.push(Section::Text {
-            label: "Total usable credits".into(),
-            value: format!("{total_usable:.2}"),
-        });
-    }
-    if let Some(period_end) = s.current_period_end {
-        sections.push(Section::Text {
-            label: "Renews".into(),
-            value: countdown::format(Some(period_end), now),
-        });
-    }
-    sections
-}
-
 fn opencode_go_sections(
     s: &crate::opencode_go::types::Usage,
     now: DateTime<Utc>,
@@ -1072,27 +1015,9 @@ fn kimi_sections(s: &crate::usage::KimiSnapshot, now: DateTime<Utc>, _tol: u32) 
         right: None,
     }]);
 
-    let weekly_pct = s.weekly_pct().clamp(0, 100) as u16;
-    v.push(Section::Spacer);
-    v.push_metric(
-        Section::Metric {
-            label: "Weekly quota".into(),
-            pct: weekly_pct,
-            severity: severity_for(s.weekly_pct()),
-            // Same `{pct}%` every other vendor shows; the request counts stay
-            // on the footnote.
-            value_label: format!("{weekly_pct}%"),
-            footnote: format!(
-                "{} / {} · {} remaining · reset {}",
-                s.weekly_used,
-                s.weekly_limit,
-                s.weekly_remaining,
-                countdown::format(s.weekly_reset_at, now)
-            ),
-        },
-        s.weekly_reset_at,
-    );
-
+    // Same order as every other vendor: the rolling 5h window first, the
+    // weekly quota under it — the bar tiles and every panel read through a
+    // session-then-weekly convention, and Kimi had it reversed.
     if s.window_limit > 0 {
         let window_pct = s.window_pct().clamp(0, 100) as u16;
         v.push(Section::Spacer);
@@ -1113,6 +1038,27 @@ fn kimi_sections(s: &crate::usage::KimiSnapshot, now: DateTime<Utc>, _tol: u32) 
             s.window_reset_at,
         );
     }
+
+    let weekly_pct = s.weekly_pct().clamp(0, 100) as u16;
+    v.push(Section::Spacer);
+    v.push_metric(
+        Section::Metric {
+            label: "Weekly quota".into(),
+            pct: weekly_pct,
+            severity: severity_for(s.weekly_pct()),
+            // Same `{pct}%` every other vendor shows; the request counts stay
+            // on the footnote.
+            value_label: format!("{weekly_pct}%"),
+            footnote: format!(
+                "{} / {} · {} remaining · reset {}",
+                s.weekly_used,
+                s.weekly_limit,
+                s.weekly_remaining,
+                countdown::format(s.weekly_reset_at, now)
+            ),
+        },
+        s.weekly_reset_at,
+    );
 
     v
 }
@@ -1725,14 +1671,16 @@ mod tests {
             .filter(|s| matches!(s, Section::Metric { .. }))
             .collect();
         assert_eq!(metrics.len(), 2);
-        assert!(sections.iter().any(|s| matches!(
-            s,
-            Section::Metric { label, .. } if label == "Weekly quota"
-        )));
-        assert!(sections.iter().any(|s| matches!(
-            s,
+        // Session-then-weekly, like every other vendor — Kimi used to come
+        // out reversed (the reported ui bug).
+        assert!(matches!(
+            metrics[0],
             Section::Metric { label, .. } if label == "Rolling window (5h)"
-        )));
+        ));
+        assert!(matches!(
+            metrics[1],
+            Section::Metric { label, .. } if label == "Weekly quota"
+        ));
 
         let find_footnote = |label: &str| -> (String, String) {
             sections

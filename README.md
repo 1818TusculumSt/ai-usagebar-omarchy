@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Native Omarchy Quattro panel, Waybar widget, and tabbed TUI for AI plan usage across **Claude**, **Codex/ChatGPT**, **Z.AI (GLM)**, **OpenRouter**, **DeepSeek**, **Kimi**, **Nous Research**, **OpenCode Go**, and other supported AI coding services.
+Native Omarchy Quattro panel, Waybar widget, and tabbed TUI for AI plan usage across **Claude**, **Codex/ChatGPT**, **Z.AI (GLM)**, **OpenRouter**, **DeepSeek**, **Kimi**, **OpenCode Go**, and other supported AI coding services.
 
 ai-usagebar-omarchy began as a Rust port of
 [`claudebar`](https://github.com/mryll/claudebar) and remains drop-in
@@ -23,12 +23,15 @@ codebase.
   tab, and an isolated cache — manage them in the native settings form
   (add / rename / delete, per-card Apply) or in `config.toml`.
 - **Custom display names**: each named account tags its bar tile with the
-  name you choose (`kimi-main 42%·2h 15%·2d`) — no name shows the provider
-  (`kimi 37%·2d`). The name is also the `--account <label>` selector.
-- **Per-account range colors on the bar**: every tile carries its own color
-  by remaining quota — green ≥50%, yellow <50%, orange <10%, red <5% — with
-  the 5h and weekly windows side by side, each with its own reset countdown
-  (`42%·2h 15%·2d`, `0%·-` for windows not started yet).
+  name you choose (`kimi-main 42%·2h 05m 15%·2d 3h`) — no name shows the provider
+  (`kimi 37%·2d 5h`). The name is also the `--account <label>` selector.
+- **Per-figure range colors on the bar**: each window figure (5h, weekly)
+  is its own Text object colored by ITS remaining band — green ≥50%,
+  yellow <50%, orange <20%, red <5% — so a green 5h figure can sit beside
+  an orange weekly one in the same tile; the account tag always stays
+  neutral (theme foreground, never changes with usage). Windows show their
+  own reset countdowns (`42%·2h 05m 15%·2d 3h`, `0%·-` for windows not started
+  yet).
 - Per-provider Waybar modules use the same JSON shape and flags as claudebar.
 - The native Omarchy Quattro plugin follows the shell theme and supports
   keyboard navigation, provider switching, live reset timers, and stale/error
@@ -119,24 +122,9 @@ come from environment variables or `config.toml`.
 | Google Antigravity | Local Antigravity server | Opt in and keep Antigravity or an interactive `agy` session running. |
 | Cursor | Existing Cursor IDE or `cursor-agent` login | Opt in and sign in once. `cursor-agent` is the headless fallback. |
 | Kiro CLI | Existing kiro-cli login | Opt in and run `kiro-cli login` once. ai-usagebar-omarchy refreshes the session when needed. |
-| Nous Research | OAuth device flow | Enable `[nous]`, click **Log in with Nous Research** in the Omarchy settings panel, or run `ai-usagebar-omarchy auth nous login`. Credentials are kept in ai-usagebar-omarchy's separate platform config directory (`~/.config/ai-usagebar-omarchy/credentials.json` on Linux). |
 | OpenCode Go | API key (`OPENCODE_GO_API_KEY` env or `[opencode-go] api_key` in config) | Enable `[opencode-go]`, then enter the key in the Omarchy settings panel or set the environment variable. |
 
-### Nous credits and OpenCode Go
-
-Nous usage percentage is calculated from the subscription-credit pool only:
-`(monthly subscription credits - subscription credits remaining) / monthly subscription credits`.
-Top-up/purchased credits are not mixed into that percentage. When the Portal
-reports them, the tooltip and TUI show subscription credits, top-up credits, and
-total usable credits as separate values.
-
-Nous login is interactive because the device code is authorized in the browser.
-Leave the terminal open until it reports that login completed, then refresh the
-Omarchy panel. The login never reads Hermes Agent credentials. On Unix, newly
-created credential directories use mode `0700`, and credential and lock files
-use mode `0600`; an existing current-user-owned config directory also works when
-it is not group- or world-writable. Windows uses the user's platform config
-directory and inherited per-user access controls.
+### OpenCode Go
 
 OpenCode Go uses the official usage endpoint and the `percent` field. Its key can
 be entered through the native Settings panel; stored values are sent to the Rust
@@ -317,7 +305,7 @@ manager integration is required.
 ## Native desktop integration
 
 The [Omarchy Quattro plugin](omarchy/README.md) is the primary frontend:
-bar tiles per account with per-account range colors, the native settings
+bar tiles per account with per-figure range colors, the native settings
 form, live reset countdowns, and stale/error states — see its README for
 controls and settings details.
 

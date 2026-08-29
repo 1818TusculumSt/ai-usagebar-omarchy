@@ -257,13 +257,31 @@ function tileTag(entry) {
   return autoTextSafe(baseProvider(entry.id)).trim()
 }
 
-// The tile's color class: the least REMAINING across its shown windows,
-// mapped to the four-step range every tile carries (so usage ranges read at
-// a glance, not just alerts):
+// The four-step range class for ONE window's percent — the remaining bands
+// every tile carries, so usage ranges read at a glance, not just alerts:
 //   remaining < 5%  → "critical" (red)
-//   remaining < 10% → "high"     (orange — the user-specified alert band)
+//   remaining < 20% → "high"     (orange)
 //   remaining < 50% → "mid"      (yellow)
 //   otherwise       → "low"      (green)
+function remainingClass(percent) {
+  if (percent === null || percent === undefined) return ""
+  var remaining = 100 - Number(percent)
+  if (remaining < 5) return "critical"
+  if (remaining < 20) return "high"
+  if (remaining < 50) return "mid"
+  return "low"
+}
+
+// A window metric's own class — the per-figure color source, independent of
+// every other window on the same account.
+function windowClass(metric) {
+  if (!metric) return ""
+  return remainingClass(metric.percent)
+}
+
+// The tile's color class: the least REMAINING across its shown windows
+// (the worst band wins). Drives the no-window fallback figure; the tile's
+// tag itself stays neutral by design.
 function tileRemainingClass(entry) {
   if (!entry || entry.status !== "ready") return ""
   var rows = tileWindows(entry)
@@ -272,21 +290,36 @@ function tileRemainingClass(entry) {
     for (var i = 0; i < sections.length; i++)
       if (sections[i].type === "metric") { rows.push(sections[i]); break }
   }
-  var minRemaining = null
+  var rank = { low: 0, mid: 1, high: 2, critical: 3 }
+  var worst = ""
   for (var r = 0; r < rows.length; r++) {
-    if (rows[r].percent === null || rows[r].percent === undefined) continue
-    var remaining = 100 - rows[r].percent
-    if (minRemaining === null || remaining < minRemaining) minRemaining = remaining
+    var cls = windowClass(rows[r])
+    if (cls === "") continue
+    if (worst === "" || rank[cls] > rank[worst]) worst = cls
   }
-  if (minRemaining === null) return ""
-  if (minRemaining < 5) return "critical"
-  if (minRemaining < 10) return "high"
-  if (minRemaining < 50) return "mid"
-  return "low"
+  return worst
 }
 
-// One-component countdown ("2h", "3d", "45m") for a bar tile — the old GNOME
-// panel's reset column, compressed to what a one-line bar has room for.
+// The worst band across a list of entries — READY entries only (a broken
+// account already flips the bar icon urgent; the dot is usage, not alerts).
+// Feeds the vertical bar's severity dot.
+function worstBand(entries) {
+  var rank = { low: 0, mid: 1, high: 2, critical: 3 }
+  var worst = ""
+  var list = Array.isArray(entries) ? entries : []
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].status !== "ready") continue
+    var cls = tileRemainingClass(list[i])
+    if (cls === "") continue
+    if (worst === "" || rank[cls] > rank[worst]) worst = cls
+  }
+  return worst
+}
+
+// One-component-or-two countdown for a bar tile. Time left under a day
+// (the 5h window) shows hours + minutes; day-scale resets (the weekly
+// window) show days + hours. Zero minutes/hours are omitted so the label
+// stays compact when the component is not needed.
 function compactReset(resetAt, nowMs) {
   if (!resetAt) return ""
   var resetMs = new Date(String(resetAt)).getTime()
@@ -296,9 +329,15 @@ function compactReset(resetAt, nowMs) {
   var minutes = Math.floor(remaining / 60000)
   var hours = Math.floor(minutes / 60)
   var days = Math.floor(hours / 24)
-  if (days > 0) return days + "d"
-  if (hours > 0) return hours + "h"
-  return Math.max(1, minutes) + "m"
+  // Under a day: hours + minutes (5h-window scale).
+  if (days === 0) {
+    var min = minutes % 60
+    if (hours === 0) return Math.max(1, minutes) + "m"
+    return min === 0 ? hours + "h" : hours + "h " + min + "m"
+  }
+  // Day scale: days + hours (weekly-window scale).
+  var hr = hours % 24
+  return hr === 0 ? days + "d" : days + "d " + hr + "h"
 }
 
 // The two windows a tile leads with: the rolling ~5h session and the weekly
@@ -319,18 +358,24 @@ function tileWindows(entry) {
   return out
 }
 
-// One account's tile: tag + the 5h and weekly figures, each with its own
-// reset countdown ("kimi 38%·2h 37%·2d"), falling back to the single
-// headline figure for accounts without windows (balances). `showRemaining`
-// flips percentages to what is LEFT of the window. `showValue` off
-// degrades every tile to its tag.
-function tileLabel(entry, showValue, showRemaining, nowMs) {
-  if (!entry) return ""
+// One account's tile as separable parts: the tag first (NEUTRAL — the key
+// name keeps the theme foreground color, never a usage range), then one
+// part per shown figure carrying its OWN class, so the 5h and weekly
+// windows render as independent Text objects with independent conditions:
+// a green 5h figure ("99% left") can sit beside an orange weekly one
+// ("13% left") instead of the whole key sharing a single color — and vice
+// versa. `showRemaining` flips percentages to what is LEFT of the window;
+// `showValue` off degrades every tile to its tag. Balance-style accounts
+// (no windows) keep the single headline figure.
+function tileParts(entry, showValue, showRemaining, nowMs) {
+  if (!entry) return []
   var tag = tileTag(entry)
-  if (!showValue) return tag
+  var tagPart = tag === "" ? null : { text: tag, cls: "" }
+  if (!showValue) return tagPart ? [tagPart] : []
   var windows = tileWindows(entry)
+  var parts = []
   if (windows.length > 0) {
-    var figures = []
+    if (tagPart) parts.push(tagPart)
     for (var i = 0; i < windows.length; i++) {
       var metric = windows[i]
       var pct = showRemaining ? 100 - metric.percent : metric.percent
@@ -339,15 +384,28 @@ function tileLabel(entry, showValue, showRemaining, nowMs) {
       // looking like the timer failed to load.
       var reset = compactReset(metric.reset_at, nowMs)
       if (reset === "") reset = "-"
-      figures.push(pct + "%·" + reset)
+      parts.push({ text: pct + "%·" + reset, cls: windowClass(metric) })
     }
-    return tag === "" ? figures.join(" ") : tag + " " + figures.join(" ")
+    return parts
   }
+  // No windows (balance-style accounts): the single headline figure.
   var summary = headline(entry)
   var text = autoTextSafe(summary.text).trim()
   if (summary.percent !== null && showRemaining) text = (100 - summary.percent) + "%"
-  if (text === "" || text === "Ready" || text === "Error") return tag
-  return tag === "" ? text : tag + " " + text
+  if (text === "" || text === "Ready" || text === "Error")
+    return tagPart ? [tagPart] : []
+  if (tagPart) parts.push(tagPart)
+  parts.push({ text: text, cls: tileRemainingClass(entry) })
+  return parts
+}
+
+// The same tile as one plain string — the joined form of `tileParts` for
+// single-label consumers (`tiledBarLabel`).
+function tileLabel(entry, showValue, showRemaining, nowMs) {
+  var parts = tileParts(entry, showValue, showRemaining, nowMs)
+  var texts = []
+  for (var i = 0; i < parts.length; i++) texts.push(parts[i].text)
+  return texts.join(" ")
 }
 
 // The tiled bar: every WORKING account side by side, the presentation the

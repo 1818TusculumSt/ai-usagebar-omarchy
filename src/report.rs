@@ -57,8 +57,6 @@ pub(crate) fn is_unconfigured_error(message: &str) -> bool {
         "Claude: no credentials at",
         "Codex: no auth file at",
         "Kimi: no credentials. Either",
-        // Nous OAuth.
-        "ai-usagebar-omarchy auth nous login",
         // Cursor / Kiro local sessions.
         "sign in to the Cursor",
         "kiro-cli login",
@@ -641,7 +639,9 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(resets, vec![Some(weekly_reset), Some(window_reset)]);
+        // Session-then-weekly, the same order every other vendor projects —
+        // Kimi used to come out reversed.
+        assert_eq!(resets, vec![Some(window_reset), Some(weekly_reset)]);
     }
 
     #[test]
