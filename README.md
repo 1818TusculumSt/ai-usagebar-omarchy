@@ -1,10 +1,10 @@
-# ai-usagebar
+# ai-usagebar-omarchy
 
 English | [简体中文](README.zh-CN.md)
 
 Native Omarchy Quattro panel, Waybar widget, and tabbed TUI for AI plan usage across **Claude**, **Codex/ChatGPT**, **Z.AI (GLM)**, **OpenRouter**, **DeepSeek**, **Kimi**, **Nous Research**, **OpenCode Go**, and other supported AI coding services.
 
-ai-usagebar began as a Rust port of
+ai-usagebar-omarchy began as a Rust port of
 [`claudebar`](https://github.com/mryll/claudebar) and remains drop-in
 compatible. It keeps claudebar's Pango tooltip, Omarchy theme detection, and
 flock-protected OAuth refresh while adding more providers and a testable Rust
@@ -119,7 +119,7 @@ come from environment variables or `config.toml`.
 | Google Antigravity | Local Antigravity server | Opt in and keep Antigravity or an interactive `agy` session running. |
 | Cursor | Existing Cursor IDE or `cursor-agent` login | Opt in and sign in once. `cursor-agent` is the headless fallback. |
 | Kiro CLI | Existing kiro-cli login | Opt in and run `kiro-cli login` once. ai-usagebar-omarchy refreshes the session when needed. |
-| Nous Research | OAuth device flow | Enable `[nous]`, click **Log in with Nous Research** in the Omarchy settings panel, or run `ai-usagebar-omarchy auth nous login`. Credentials are kept in ai-usagebar's separate platform config directory (`~/.config/ai-usagebar-omarchy/credentials.json` on Linux). |
+| Nous Research | OAuth device flow | Enable `[nous]`, click **Log in with Nous Research** in the Omarchy settings panel, or run `ai-usagebar-omarchy auth nous login`. Credentials are kept in ai-usagebar-omarchy's separate platform config directory (`~/.config/ai-usagebar-omarchy/credentials.json` on Linux). |
 | OpenCode Go | API key (`OPENCODE_GO_API_KEY` env or `[opencode-go] api_key` in config) | Enable `[opencode-go]`, then enter the key in the Omarchy settings panel or set the environment variable. |
 
 ### Nous credits and OpenCode Go
@@ -182,7 +182,7 @@ subscription — have no key to save, so enable them with `enabled = true` in
 
 ### Credential resolution order (for API-key vendors)
 
-For each API-key vendor, ai-usagebar checks in this order:
+For each API-key vendor, ai-usagebar-omarchy checks in this order:
 
 1. A non-empty environment variable named by `api_key_env`.
 2. An inline `api_key` in the same config section.
@@ -194,7 +194,7 @@ For each API-key vendor, ai-usagebar checks in this order:
   Redact them before committing that file to dotfiles. Environment variables
   remain the default and avoid storing keys in the config.
 - Claude and Codex credentials stay in files managed by their official CLIs.
-- SuperGrok credentials stay inside Grok Build. ai-usagebar receives a
+- SuperGrok credentials stay inside Grok Build. ai-usagebar-omarchy receives a
   credential-free billing result and hashes auth/config files only to separate
   caches between logins.
 - Cursor's `state.vscdb` and `cursor-agent` fallback `auth.json` are read-only.
@@ -204,7 +204,7 @@ For each API-key vendor, ai-usagebar checks in this order:
 #### macOS: Claude credentials in the Keychain
 
 Recent Claude Code builds store OAuth credentials in the macOS login Keychain
-instead of `~/.claude/.credentials.json`. No setup is needed: ai-usagebar uses
+instead of `~/.claude/.credentials.json`. No setup is needed: ai-usagebar-omarchy uses
 macOS's `security` tool to read and refresh the `Claude Code-credentials` item.
 
 - The default account still uses an existing credentials file when one is
@@ -250,17 +250,17 @@ display option, account path, region, and API-key setting.
 
 ```bash
 # Local testing — auto-detects TTY and renders human-readable output.
-ai-usagebar                        # uses [ui] primary (defaults to anthropic)
-ai-usagebar --vendor anthropic_api
-ai-usagebar --vendor openai
-ai-usagebar --vendor zai
-ai-usagebar --vendor openrouter
-ai-usagebar --vendor deepseek
-ai-usagebar --vendor kimi
-ai-usagebar --vendor kiro
+ai-usagebar-omarchy                        # uses [ui] primary (defaults to anthropic)
+ai-usagebar-omarchy --vendor anthropic_api
+ai-usagebar-omarchy --vendor openai
+ai-usagebar-omarchy --vendor zai
+ai-usagebar-omarchy --vendor openrouter
+ai-usagebar-omarchy --vendor deepseek
+ai-usagebar-omarchy --vendor kimi
+ai-usagebar-omarchy --vendor kiro
 
 # Force Waybar JSON (e.g. piping into jq).
-ai-usagebar --json
+ai-usagebar-omarchy --json
 
 # Everything at once: quota + time-to-reset for every configured vendor,
 # with one entry per named Claude account.
@@ -270,13 +270,13 @@ ai-usagebar-omarchy usage --json | jq '.entries[] | {id, metrics, sections}'
 # Tile every enabled vendor AND account in one bar module — one compact
 # tile per account (team 42% │ kmi 18% │ cld 5%), hover for the combined
 # report. The taskbar equivalent of the GNOME panel's multi-key layout.
-ai-usagebar --vendor all
+ai-usagebar-omarchy --vendor all
 
 # Live preview while iterating on --format / --tooltip-format.
-ai-usagebar --vendor openrouter --watch 5
+ai-usagebar-omarchy --vendor openrouter --watch 5
 
 # Interactive TUI with tabs.
-ai-usagebar-tui
+ai-usagebar-omarchy-tui
 ```
 
 The JSON report has two views of each provider:
@@ -331,14 +331,14 @@ Use one bar item and scroll through your vendors. The TUI on-click still shows t
 "modules-right": ["custom/aibar", ...],
 
 "custom/aibar": {
-    "exec": "ai-usagebar --format '{vendor_short} {session_pct}% · {session_reset}'",
+    "exec": "ai-usagebar-omarchy --format '{vendor_short} {session_pct}% · {session_reset}'",
     "return-type": "json",
     "interval": 300,
     "signal": 13,
     "tooltip": true,
-    "on-click": "ai-usagebar-tui",
-    "on-scroll-up":   "ai-usagebar --cycle-next",
-    "on-scroll-down": "ai-usagebar --cycle-prev"
+    "on-click": "ai-usagebar-omarchy-tui",
+    "on-scroll-up":   "ai-usagebar-omarchy --cycle-next",
+    "on-scroll-down": "ai-usagebar-omarchy --cycle-prev"
 }
 ```
 
@@ -372,38 +372,38 @@ If you'd rather see them all at once:
 "modules-right": ["custom/claude", "custom/openai", "custom/openrouter", "custom/zai", "custom/deepseek", "custom/kimi"],
 
 "custom/claude": {
-    "exec": "ai-usagebar --vendor anthropic --icon '󰚩'",
+    "exec": "ai-usagebar-omarchy --vendor anthropic --icon '󰚩'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true,
-    "on-click": "ai-usagebar-tui"
+    "on-click": "ai-usagebar-omarchy-tui"
 },
 "custom/openai": {
-    "exec": "ai-usagebar --vendor openai --icon '󱢆'",
+    "exec": "ai-usagebar-omarchy --vendor openai --icon '󱢆'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true
 },
 "custom/openrouter": {
-    "exec": "ai-usagebar --vendor openrouter --icon '󱙺' --format '{or_balance} · {or_used_today}'",
+    "exec": "ai-usagebar-omarchy --vendor openrouter --icon '󱙺' --format '{or_balance} · {or_used_today}'",
     "return-type": "json",
     "interval": 600,
     "tooltip": true
 },
 "custom/zai": {
-    "exec": "ai-usagebar --vendor zai --icon '󰚩'",
+    "exec": "ai-usagebar-omarchy --vendor zai --icon '󰚩'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true
 },
 "custom/deepseek": {
-    "exec": "ai-usagebar --vendor deepseek --icon '󰧑'",
+    "exec": "ai-usagebar-omarchy --vendor deepseek --icon '󰧑'",
     "return-type": "json",
     "interval": 600,
     "tooltip": true
 },
 "custom/kimi": {
-    "exec": "ai-usagebar --vendor kimi --icon '󰚩'",
+    "exec": "ai-usagebar-omarchy --vendor kimi --icon '󰚩'",
     "return-type": "json",
     "interval": 600,
     "tooltip": true
@@ -427,7 +427,7 @@ codex_auth_path = "~/.codex-work/auth.json"
 ```
 
 ```bash
-ai-usagebar --vendor openai --account work
+ai-usagebar-omarchy --vendor openai --account work
 ```
 
 Each account keeps its own cache and refreshes independently. Without
@@ -440,7 +440,7 @@ setup is:
 
 ```bash
 ai-usagebar-omarchy account add work
-ai-usagebar --vendor anthropic --account work
+ai-usagebar-omarchy --vendor anthropic --account work
 ```
 
 On macOS, the same account command can also capture and switch the active
@@ -466,12 +466,12 @@ Waybar examples.
 By default Hyprland tiles the TUI. To make `ai-usagebar-omarchy-tui` open as a centered floating window, the same way Omarchy floats its own settings TUIs (Wi-Fi/`impala`, audio/`wiremix`, Bluetooth/`bluetui`), add this to `~/.config/hypr/hyprland.conf` or any sourced `.conf`, such as `looknfeel.conf`:
 
 ```ini
-# ai-usagebar TUI — float + center + fixed size. omarchy-launch-tui sets the
-# app-id from the binary basename, so the class is org.omarchy.ai-usagebar-tui.
+# ai-usagebar-omarchy TUI — float + center + fixed size. omarchy-launch-tui sets the
+# app-id from the binary basename, so the class is org.omarchy.ai-usagebar-omarchy-tui.
 # 875x600 matches the size Omarchy gives its own `floating-window`-tagged TUIs.
-windowrule = float on, match:class ^(org\.omarchy\.ai-usagebar-tui)$
-windowrule = center on, match:class ^(org\.omarchy\.ai-usagebar-tui)$
-windowrule = size 875 600, match:class ^(org\.omarchy\.ai-usagebar-tui)$
+windowrule = float on, match:class ^(org\.omarchy\.ai-usagebar-omarchy-tui)$
+windowrule = center on, match:class ^(org\.omarchy\.ai-usagebar-omarchy-tui)$
+windowrule = size 875 600, match:class ^(org\.omarchy\.ai-usagebar-omarchy-tui)$
 ```
 
 Then `hyprctl reload` (no logout needed).
@@ -496,8 +496,8 @@ Run `make smoke` to check live response shapes.
 Use placeholders in `--format` and `--tooltip-format`:
 
 ```bash
-ai-usagebar --vendor anthropic --format '{session_pct}% · {session_reset}'
-ai-usagebar --vendor openrouter --format '${or_balance} remaining'
+ai-usagebar-omarchy --vendor anthropic --format '{session_pct}% · {session_reset}'
+ai-usagebar-omarchy --vendor openrouter --format '${or_balance} remaining'
 ```
 
 Shared claudebar placeholders and every provider-specific field are listed in
@@ -506,8 +506,8 @@ the [format placeholder reference](docs/format-placeholders.md).
 ## Local development
 
 ```bash
-ai-usagebar --watch 5                              # iterate on --format live
-ai-usagebar --vendor openrouter --format '{or_balance} · today {or_used_today}'
+ai-usagebar-omarchy --watch 5                              # iterate on --format live
+ai-usagebar-omarchy --vendor openrouter --format '{or_balance} · today {or_used_today}'
 
 make test                                          # unit + integration
 source ~/.config/zsh/secrets                       # required for existing vendor smoke tests
@@ -517,7 +517,7 @@ make clippy                                        # cargo clippy -D warnings
 
 ## TUI controls
 
-![ai-usagebar-tui showing the Codex tab — 5h and weekly gauges, Credits block with message-count ranges, tabs at top, key hints in the footer](screenshots/tui-openai.png)
+![ai-usagebar-omarchy-tui showing the Codex tab — 5h and weekly gauges, Credits block with message-count ranges, tabs at top, key hints in the footer](screenshots/tui-openai.png)
 
 - `Tab` / `l` / `→` — next tab
 - `Shift+Tab` / `h` / `←` — previous tab
@@ -533,7 +533,7 @@ screen and is marked stale.
 
 OpenRouter uses the same layout for balance, usage by period, and account tier:
 
-![ai-usagebar-tui showing the OpenRouter tab — Credit balance gauge at 98% in red ($13.67 left of $900), Usage by period with today/week/month, paid tier](screenshots/tui-openrouter.png)
+![ai-usagebar-omarchy-tui showing the OpenRouter tab — Credit balance gauge at 98% in red ($13.67 left of $900), Usage by period with today/week/month, paid tier](screenshots/tui-openrouter.png)
 
 ### Local context overlay
 

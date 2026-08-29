@@ -1,13 +1,13 @@
 # AI Usage Bar — GNOME Shell extension
 
-A native GNOME top-panel indicator for [`ai-usagebar`](../README.md). It puts
+A native GNOME top-panel indicator for [`ai-usagebar-omarchy`](../README.md). It puts
 the **5-hour session** and **weekly** usage bars next to the clock/network,
 with optional dynamic model-scoped (for example, Fable) and extra-usage rows
 in a native click dropdown.
 
 This is the GNOME counterpart to the project's Waybar widget: Waybar is
 Wayland-only (Sway/Hyprland) and can't dock into the GNOME top bar, so this
-extension bridges the gap by shelling out to the same `ai-usagebar` binary and
+extension bridges the gap by shelling out to the same `ai-usagebar-omarchy` binary and
 drawing the bars with native `St` widgets. The panel is rendered by GNOME; no
 GNOME screenshot is currently bundled.
 
@@ -30,7 +30,7 @@ shows the last cached figures, then an error once those age out.
 ## Requirements
 
 - GNOME Shell **45–50** (ESM extensions).
-- The `ai-usagebar` binary on `PATH` (or `~/.cargo/bin`, or set an explicit
+- The `ai-usagebar-omarchy` binary on `PATH` (or `~/.cargo/bin`, or set an explicit
   path in preferences). Install it from a GitHub release or build it from
   source — see the [main README](../README.md).
 - For the colored bars to be even, the panel uses a monospace font. For the
@@ -78,7 +78,7 @@ mkdir -p "$DEST" && cp -r * "$DEST"/      # or: ln -s "$PWD" "$DEST"
 It runs:
 
 ```
-ai-usagebar --vendor <vendor> --format '{plan};;{session_pct};;{session_reset};;{weekly_pct};;{weekly_reset};;{sonnet_pct};;{sonnet_reset};;{extra_pct};;{extra_spent};;{extra_limit};;{scoped_model};;{scoped_pct};;{scoped_reset};;{session_elapsed};;{weekly_elapsed};;{scoped_elapsed};;{vendor_short};;{extra_model};;{extra_reset};;{extra_elapsed};;{session_model};;{weekly_model};;__aiub_end__'
+ai-usagebar-omarchy --vendor <vendor> --format '{plan};;{session_pct};;{session_reset};;{weekly_pct};;{weekly_reset};;{sonnet_pct};;{sonnet_reset};;{extra_pct};;{extra_spent};;{extra_limit};;{scoped_model};;{scoped_pct};;{scoped_reset};;{session_elapsed};;{weekly_elapsed};;{scoped_elapsed};;{vendor_short};;{extra_model};;{extra_reset};;{extra_elapsed};;{session_model};;{weekly_model};;__aiub_end__'
 ```
 
 parses the Waybar JSON (`{text, tooltip, class}`), extracts the formatted

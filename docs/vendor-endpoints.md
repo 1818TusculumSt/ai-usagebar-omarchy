@@ -1,6 +1,6 @@
 # Vendor endpoints and live tests
 
-Some providers do not publish a stable usage API. ai-usagebar keeps its parsers
+Some providers do not publish a stable usage API. ai-usagebar-omarchy keeps its parsers
 defensive and includes opt-in live tests for catching response changes.
 
 ## Support matrix
@@ -61,5 +61,5 @@ To test only Kimi:
 cargo test --test live kimi_live -- --ignored --nocapture
 ```
 
-The tests validate the fields used by ai-usagebar and report which part of a
+The tests validate the fields used by ai-usagebar-omarchy and report which part of a
 response changed.

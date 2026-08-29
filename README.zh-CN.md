@@ -1,10 +1,10 @@
-# ai-usagebar
+# ai-usagebar-omarchy
 
 [English](README.md) | 简体中文
 
 Omarchy Quattro 原生面板、Waybar 小组件与多标签 TUI，覆盖 **Claude**、**Codex/ChatGPT**、**Z.AI (GLM)**、**OpenRouter**、**DeepSeek**、**Kimi**、**Nous Research**、**OpenCode Go** 等多家 AI 编程服务的套餐用量。
 
-ai-usagebar 最初是
+ai-usagebar-omarchy 最初是
 [`claudebar`](https://github.com/mryll/claudebar) 的 Rust 移植，保持即插即用兼容：保留了 claudebar 的 Pango 悬浮提示、Omarchy 主题探测与 flock 保护的 OAuth 刷新，同时扩展了更多供应商与可测试的 Rust 代码库。
 
 ![Omarchy Quattro 原生面板：AI 配额用量、重置倒计时与供应商标签页](screenshots/omarchy-quattro-panel.png)
@@ -141,7 +141,7 @@ Moonshot、Grok、SuperGrok、Antigravity、Cursor、MiniMax 与 Kiro CLI 默认
 
 ### 密钥解析顺序（API 密钥类供应商）
 
-对每个 API 密钥供应商，ai-usagebar 按以下顺序检查：
+对每个 API 密钥供应商，ai-usagebar-omarchy 按以下顺序检查：
 
 1. `api_key_env` 指定的非空环境变量。
 2. 同一配置小节中的内联 `api_key`。
@@ -152,7 +152,7 @@ Moonshot、Grok、SuperGrok、Antigravity、Cursor、MiniMax 与 Kiro CLI 默认
 - 内联密钥保存在 `~/.config/ai-usagebar-omarchy/config.toml`，权限 `600`。
   提交 dotfiles 前先脱敏。环境变量仍是默认方式，可避免密钥落盘。
 - Claude 与 Codex 凭据保留在各自官方 CLI 管理的文件中。
-- SuperGrok 凭据留在 Grok Build 内部。ai-usagebar 只接收免凭据的账单结果，
+- SuperGrok 凭据留在 Grok Build 内部。ai-usagebar-omarchy 只接收免凭据的账单结果，
   对 auth/config 文件仅做哈希以区分不同登录的缓存。
 - Cursor 的 `state.vscdb` 与 `cursor-agent` 回退 `auth.json` 只读。
 - kiro-cli 的 `data.sqlite3` 只读。刷新后的凭据写入账号级 `kiro/oauth.json`
@@ -161,7 +161,7 @@ Moonshot、Grok、SuperGrok、Antigravity、Cursor、MiniMax 与 Kiro CLI 默认
 #### macOS：钥匙串中的 Claude 凭据
 
 新版 Claude Code 将 OAuth 凭据存入 macOS 登录钥匙串而非
-`~/.claude/.credentials.json`。无需设置：ai-usagebar 使用 macOS 的 `security`
+`~/.claude/.credentials.json`。无需设置：ai-usagebar-omarchy 使用 macOS 的 `security`
 工具读取并刷新 `Claude Code-credentials` 条目。
 
 - 默认账号在有凭据文件时仍优先使用文件。
@@ -199,17 +199,17 @@ enabled = true
 
 ```bash
 # 本地测试——自动检测 TTY，输出人类可读格式。
-ai-usagebar                        # 使用 [ui] primary（默认 anthropic）
-ai-usagebar --vendor anthropic_api
-ai-usagebar --vendor openai
-ai-usagebar --vendor zai
-ai-usagebar --vendor openrouter
-ai-usagebar --vendor deepseek
-ai-usagebar --vendor kimi
-ai-usagebar --vendor kiro
+ai-usagebar-omarchy                        # 使用 [ui] primary（默认 anthropic）
+ai-usagebar-omarchy --vendor anthropic_api
+ai-usagebar-omarchy --vendor openai
+ai-usagebar-omarchy --vendor zai
+ai-usagebar-omarchy --vendor openrouter
+ai-usagebar-omarchy --vendor deepseek
+ai-usagebar-omarchy --vendor kimi
+ai-usagebar-omarchy --vendor kiro
 
 # 强制 Waybar JSON（例如管道给 jq）。
-ai-usagebar --json
+ai-usagebar-omarchy --json
 
 # 一次看全部：每个已配置供应商的配额与重置时间，
 # 每个命名 Claude 账号一条记录。
@@ -218,13 +218,13 @@ ai-usagebar-omarchy usage --json | jq '.entries[] | {id, metrics, sections}'
 
 # 一个任务栏模块平铺所有已启用供应商与账号——每账号一个紧凑磁贴
 # （team 42% │ kmi 18% │ cld 5%），悬停查看综合报告。
-ai-usagebar --vendor all
+ai-usagebar-omarchy --vendor all
 
 # 迭代 --format / --tooltip-format 时的实时预览。
-ai-usagebar --vendor openrouter --watch 5
+ai-usagebar-omarchy --vendor openrouter --watch 5
 
 # 带标签页的交互式 TUI。
-ai-usagebar-tui
+ai-usagebar-omarchy-tui
 ```
 
 JSON 报告对每个供应商提供两个视图：
@@ -272,14 +272,14 @@ ai-usagebar-omarchy-tui               # 在当前终端打开
 "modules-right": ["custom/aibar", ...],
 
 "custom/aibar": {
-    "exec": "ai-usagebar --format '{vendor_short} {session_pct}% · {session_reset}'",
+    "exec": "ai-usagebar-omarchy --format '{vendor_short} {session_pct}% · {session_reset}'",
     "return-type": "json",
     "interval": 300,
     "signal": 13,
     "tooltip": true,
-    "on-click": "ai-usagebar-tui",
-    "on-scroll-up":   "ai-usagebar --cycle-next",
-    "on-scroll-down": "ai-usagebar --cycle-prev"
+    "on-click": "ai-usagebar-omarchy-tui",
+    "on-scroll-up":   "ai-usagebar-omarchy --cycle-next",
+    "on-scroll-down": "ai-usagebar-omarchy --cycle-prev"
 }
 ```
 
@@ -310,38 +310,38 @@ Cursor 把两个用量池映射到 session 与 weekly 槽位；Kiro 把单一池
 "modules-right": ["custom/claude", "custom/openai", "custom/openrouter", "custom/zai", "custom/deepseek", "custom/kimi"],
 
 "custom/claude": {
-    "exec": "ai-usagebar --vendor anthropic --icon '󰚩'",
+    "exec": "ai-usagebar-omarchy --vendor anthropic --icon '󰚩'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true,
-    "on-click": "ai-usagebar-tui"
+    "on-click": "ai-usagebar-omarchy-tui"
 },
 "custom/openai": {
-    "exec": "ai-usagebar --vendor openai --icon '󱢆'",
+    "exec": "ai-usagebar-omarchy --vendor openai --icon '󱢆'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true
 },
 "custom/openrouter": {
-    "exec": "ai-usagebar --vendor openrouter --icon '󰙺' --format '{or_balance} · {or_used_today}'",
+    "exec": "ai-usagebar-omarchy --vendor openrouter --icon '󰙺' --format '{or_balance} · {or_used_today}'",
     "return-type": "json",
     "interval": 600,
     "tooltip": true
 },
 "custom/zai": {
-    "exec": "ai-usagebar --vendor zai --icon '󰚩'",
+    "exec": "ai-usagebar-omarchy --vendor zai --icon '󰚩'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true
 },
 "custom/deepseek": {
-    "exec": "ai-usagebar --vendor deepseek --icon '󰧑'",
+    "exec": "ai-usagebar-omarchy --vendor deepseek --icon '󰧑'",
     "return-type": "json",
     "interval": 600,
     "tooltip": true
 },
 "custom/kimi": {
-    "exec": "ai-usagebar --vendor kimi --icon '󰚩'",
+    "exec": "ai-usagebar-omarchy --vendor kimi --icon '󰚩'",
     "return-type": "json",
     "interval": 600,
     "tooltip": true
@@ -367,7 +367,7 @@ codex_auth_path = "~/.codex-work/auth.json"
 ```
 
 ```bash
-ai-usagebar --vendor openai --account work
+ai-usagebar-omarchy --vendor openai --account work
 ```
 
 每个账号独立缓存、独立刷新。不带 `--account` 时照旧使用默认 `codex_auth_path`
@@ -379,7 +379,7 @@ ai-usagebar --vendor openai --account work
 
 ```bash
 ai-usagebar-omarchy account add work
-ai-usagebar --vendor anthropic --account work
+ai-usagebar-omarchy --vendor anthropic --account work
 ```
 
 macOS 上，同一账号命令还能捕获并切换当前 Claude Desktop 或 CLI 登录。专门的
@@ -406,12 +406,12 @@ TUI（Wi-Fi/`impala`、音频/`wiremix`、蓝牙/`bluetui`）那样居中浮动�
 `looknfeel.conf`）：
 
 ```ini
-# ai-usagebar TUI — 浮动 + 居中 + 固定尺寸。omarchy-launch-tui 从二进制
-# 文件名设置 app-id，因此 class 为 org.omarchy.ai-usagebar-tui。
+# ai-usagebar-omarchy TUI — 浮动 + 居中 + 固定尺寸。omarchy-launch-tui 从二进制
+# 文件名设置 app-id，因此 class 为 org.omarchy.ai-usagebar-omarchy-tui。
 # 875x600 与 Omarchy 给自家 floating-window TUI 的尺寸一致。
-windowrule = float on, match:class ^(org\.omarchy\.ai-usagebar-tui)$
-windowrule = center on, match:class ^(org\.omarchy\.ai-usagebar-tui)$
-windowrule = size 875 600, match:class ^(org\.omarchy\.ai-usagebar-tui)$
+windowrule = float on, match:class ^(org\.omarchy\.ai-usagebar-omarchy-tui)$
+windowrule = center on, match:class ^(org\.omarchy\.ai-usagebar-omarchy-tui)$
+windowrule = size 875 600, match:class ^(org\.omarchy\.ai-usagebar-omarchy-tui)$
 ```
 
 然后 `hyprctl reload`（无需注销）。
@@ -440,8 +440,8 @@ CLI 与 TUI 支持上方认证表中的全部供应商。各原生桌面集成�
 在 `--format` 与 `--tooltip-format` 中使用占位符：
 
 ```bash
-ai-usagebar --vendor anthropic --format '{session_pct}% · {session_reset}'
-ai-usagebar --vendor openrouter --format '${or_balance} remaining'
+ai-usagebar-omarchy --vendor anthropic --format '{session_pct}% · {session_reset}'
+ai-usagebar-omarchy --vendor openrouter --format '${or_balance} remaining'
 ```
 
 claudebar 共享占位符与全部供应商专属字段见
@@ -450,8 +450,8 @@ claudebar 共享占位符与全部供应商专属字段见
 ## 本地开发
 
 ```bash
-ai-usagebar --watch 5                              # 实时迭代 --format
-ai-usagebar --vendor openrouter --format '{or_balance} · today {or_used_today}'
+ai-usagebar-omarchy --watch 5                              # 实时迭代 --format
+ai-usagebar-omarchy --vendor openrouter --format '{or_balance} · today {or_used_today}'
 
 make test                                          # 单元 + 集成测试
 source ~/.config/zsh/secrets                       # 现有供应商联调测试必需
@@ -461,7 +461,7 @@ make clippy                                        # cargo clippy -D warnings
 
 ## TUI 控制
 
-![ai-usagebar-tui Codex 标签页——5 小时与周仪表、Credits 区块含消息数区间、顶部标签页、底部快捷键提示](screenshots/tui-openai.png)
+![ai-usagebar-omarchy-tui Codex 标签页——5 小时与周仪表、Credits 区块含消息数区间、顶部标签页、底部快捷键提示](screenshots/tui-openai.png)
 
 - `Tab` / `l` / `→` — 下一个标签页
 - `Shift+Tab` / `h` / `←` — 上一个标签页
@@ -476,7 +476,7 @@ TUI 每 60 秒刷新。刷新期间保留当前数值并显示 `↻` 标记。�
 
 OpenRouter 对余额、分时段用量与账号层级使用相同布局：
 
-![ai-usagebar-tui OpenRouter 标签页——Credit 余额仪表 98% 红色（$900 剩 $13.67）、分时段用量 today/week/month、付费层级](screenshots/tui-openrouter.png)
+![ai-usagebar-omarchy-tui OpenRouter 标签页——Credit 余额仪表 98% 红色（$900 剩 $13.67）、分时段用量 today/week/month、付费层级](screenshots/tui-openrouter.png)
 
 ### 本地上下文悬浮层
 

@@ -1,13 +1,13 @@
 # AI Usage Bar — KDE Plasma 6 plasmoid
 
-A native Plasma panel widget for [`ai-usagebar`](../README.md). It puts up to
+A native Plasma panel widget for [`ai-usagebar-omarchy`](../README.md). It puts up to
 two usage values in the panel, with a click popup listing every quota window,
 model-scoped rows, and the two-pool layout that Google Antigravity needs.
 
 This is the KDE counterpart to the project's Waybar widget and its
 [GNOME extension](../gnome-extension/README.md): Waybar is Wayland-bar-specific
 and can't dock into a Plasma panel, so this shells out to the same
-`ai-usagebar` binary and draws with native Plasma/Kirigami components.
+`ai-usagebar-omarchy` binary and draws with native Plasma/Kirigami components.
 
 ![The plasmoid in a Plasma 6 panel showing `5h 2%` and `7d 44%` with their bars,
 and its popup open below: a Claude / Claude Max 20x header with refresh and TUI
@@ -18,7 +18,7 @@ live "Resets in" countdown — and an "Updated just now" footer](../screenshots/
 
 ## Vendor scope
 
-Whatever `ai-usagebar usage --json` reports. The widget keeps no vendor list of
+Whatever `ai-usagebar-omarchy usage --json` reports. The widget keeps no vendor list of
 its own: every entry the binary reports for your `config.toml` becomes a tab in
 the popup, with its canonical name and its plan or its error. Adding a vendor to
 the CLI makes it appear here with no change to this package.
@@ -33,7 +33,7 @@ One caveat worth knowing before you put a vendor in the scroll ring:
 ## Requirements
 
 - Plasma 6 (developed against 6.6, `X-Plasma-API-Minimum-Version` is `6.0`)
-- `ai-usagebar` on `PATH`, or its full path set in the widget settings
+- `ai-usagebar-omarchy` on `PATH`, or its full path set in the widget settings
 - `plasma5support` (ships with Plasma; provides the executable data engine)
 - GNU coreutils `timeout` (standard on Plasma Linux distributions)
 
@@ -87,7 +87,7 @@ thing while you choose.
 
 **Each panel instance keeps its own vendor.** One report covers every vendor, so
 switching is a client-side re-pick rather than a refetch, and the widget never
-reads `~/.cache/ai-usagebar/active_vendor` — that file belongs to Waybar's
+reads `~/.cache/ai-usagebar-omarchy/active_vendor` — that file belongs to Waybar's
 `--cycle-next`. Two instances on one panel track two vendors, and scrolling one
 never moves the other.
 
@@ -165,12 +165,12 @@ page — is still exercised by hand against the checklist below.
 
 **Manual smoke checklist**
 
-1. Panel text matches the matching entry of `ai-usagebar usage --json`.
+1. Panel text matches the matching entry of `ai-usagebar-omarchy usage --json`.
 2. Scroll advances the ring and wraps; scrolling back reverses it. Clicking a
    provider tab switches without a refetch.
 3. Two instances pinned to different vendors keep their own across a
    `systemctl --user restart plasma-plasmashell` *and* a logout.
-4. Running `ai-usagebar --cycle-next` in a terminal does **not** move the
+4. Running `ai-usagebar-omarchy --cycle-next` in a terminal does **not** move the
    widget — the proof it is independent of the shared state file.
 5. Hover shows every quota row, and the countdowns tick between fetches.
 6. Click opens the popup; the refresh and TUI buttons are visible and work

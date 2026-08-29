@@ -76,14 +76,14 @@ When cutting a new version (patch, minor, or major):
    curl -sLO https://github.com/KyleLee/ai-usagebar-omarchy/archive/refs/tags/vX.Y.Z.tar.gz
    sha256sum vX.Y.Z.tar.gz   # paste into PKGBUILD
    # Bin x86_64:
-   curl -sL https://github.com/KyleLee/ai-usagebar-omarchy/releases/download/vX.Y.Z/ai-usagebar-linux-x86_64.tar.gz.sha256
+   curl -sL https://github.com/KyleLee/ai-usagebar-omarchy/releases/download/vX.Y.Z/ai-usagebar-omarchy-linux-x86_64.tar.gz.sha256
    # Bin aarch64:
-   curl -sL https://github.com/KyleLee/ai-usagebar-omarchy/releases/download/vX.Y.Z/ai-usagebar-linux-aarch64.tar.gz.sha256
+   curl -sL https://github.com/KyleLee/ai-usagebar-omarchy/releases/download/vX.Y.Z/ai-usagebar-omarchy-linux-aarch64.tar.gz.sha256
    ```
    Then regenerate the `.SRCINFO`s exactly as in step 5 (now with the
    real hashes), and push to the separate AUR git repos:
-   - `~/Projects/aur-ai-usagebar` → `ssh://aur@aur.archlinux.org/ai-usagebar.git`
-   - `~/Projects/aur-ai-usagebar-bin` → `ssh://aur@aur.archlinux.org/ai-usagebar-bin.git`
+   - `~/Projects/aur-ai-usagebar-omarchy` → `ssh://aur@aur.archlinux.org/ai-usagebar-omarchy.git`
+   - `~/Projects/aur-ai-usagebar-omarchy-bin` → `ssh://aur@aur.archlinux.org/ai-usagebar-omarchy-bin.git`
 
    **Always `git fetch origin && git reset --hard origin/master` in each
    AUR clone first.** A previous session may have pushed an intermediate

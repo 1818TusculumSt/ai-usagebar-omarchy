@@ -19,7 +19,7 @@ settings.
 #                         # | minimax | kiro
 
 [context]
-enabled = false           # opt in, then press c in ai-usagebar-tui
+enabled = false           # opt in, then press c in ai-usagebar-omarchy-tui
 # projects_path = "~/.claude/projects"
 # context_window_tokens = 200000  # optional fallback denominator
 # [context.model_context_window_tokens]
@@ -70,7 +70,7 @@ enabled = true             # disabled by default; enable once you add an API key
 
 [kimi]
 enabled = true             # disabled by default; a Kimi Code CLI login is enough
-# Log in with `kimi` and ai-usagebar reads the OAuth session the CLI already
+# Log in with `kimi` and ai-usagebar-omarchy reads the OAuth session the CLI already
 # stored, refreshing it in place when it expires — no key to create or paste.
 # An API key still wins when one is set; a Kimi For Coding subscription can
 # issue one at kimi.com/code/console, and a platform key works too.
@@ -169,7 +169,7 @@ is billed one of three ways, and `account_type` says which:
   Storage → `Bigmodel-Organization` / `Bigmodel-Project`). The response shape
   is identical to the personal plan.
 - `usage`: a pay-as-you-go key with no coding subscription. The quota endpoint
-  answers "not subscribed" for it, so ai-usagebar skips quota and reports the
+  answers "not subscribed" for it, so ai-usagebar-omarchy skips quota and reports the
   7-day aggregate (prompts · tokens) from the model-usage endpoint instead.
 
 ```toml

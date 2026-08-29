@@ -1,6 +1,6 @@
 # AI Usage Bar — macOS menu bar app
 
-A native macOS menu bar app for [`ai-usagebar`](../README.md). It shows the
+A native macOS menu bar app for [`ai-usagebar-omarchy`](../README.md). It shows the
 **5-hour (session)** and **weekly** usage bars — plus an optional
 dynamic **model-scoped** bar (for example, Fable) and **extra-usage (cost)**
 bar — in the menu bar next to the clock, with a native dropdown. For most
@@ -43,10 +43,10 @@ time, so one of those must be running for quota to load.
 ## Requirements
 
 - macOS with the **Command Line Tools** (`xcode-select --install`) for `swiftc`.
-- The `ai-usagebar` binary on the Mac. Install it with `cargo install ai-usagebar`
+- The `ai-usagebar-omarchy` binary on the Mac. Install it with `cargo install --git https://github.com/KyleLee/ai-usagebar-omarchy`
   (lands in `~/.cargo/bin`) — see the [main README](../README.md).
 - Run `claude` once on the Mac so its OAuth creds are in the login **Keychain**;
-  ai-usagebar reads them there automatically (no env vars).
+  ai-usagebar-omarchy reads them there automatically (no env vars).
 
 ## Build & run
 
@@ -167,10 +167,10 @@ switch is running.
 The same thing from the shell:
 
 ```bash
-ai-usagebar account status                  # who each surface is signed in as
-ai-usagebar account add work --desktop      # capture a Claude Desktop account
-ai-usagebar account switch work --dry-run   # what a switch would do
-ai-usagebar account switch work --desktop   # quits and reopens Claude.app
+ai-usagebar-omarchy account status                  # who each surface is signed in as
+ai-usagebar-omarchy account add work --desktop      # capture a Claude Desktop account
+ai-usagebar-omarchy account switch work --dry-run   # what a switch would do
+ai-usagebar-omarchy account switch work --desktop   # quits and reopens Claude.app
 ```
 
 See the main README's *Switching the active Claude account* for the full story.
@@ -193,7 +193,7 @@ The TUI does the same, polling the file every couple of seconds.
 
 ## How it works
 
-Runs `ai-usagebar --vendor <v> --format '{plan};;{session_pct};;…'`, parses the
+Runs `ai-usagebar-omarchy --vendor <v> --format '{plan};;{session_pct};;…'`, parses the
 Waybar JSON (`{text, …}`), and draws the bars as colored `NSAttributedString`s
 in the status item and the dropdown. The subprocess runs **off the main thread**
 (`DispatchQueue.global` → back to `.main` for UI), so the UI never blocks.

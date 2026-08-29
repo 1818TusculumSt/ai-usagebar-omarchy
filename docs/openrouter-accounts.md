@@ -1,6 +1,6 @@
 # OpenRouter account guide
 
-ai-usagebar can report several OpenRouter keys without running separate config
+ai-usagebar-omarchy can report several OpenRouter keys without running separate config
 or cache roots. The existing `[openrouter]` key remains the default account.
 
 ## Add named accounts
@@ -23,7 +23,7 @@ api_key = "sk-or-v1-personal"
 ```
 
 An account can use `api_key_env`, an inline `api_key`, or both. The environment
-variable wins when both are set. If you store any key inline, ai-usagebar
+variable wins when both are set. If you store any key inline, ai-usagebar-omarchy
 tightens the config file to mode `0600` on Unix.
 
 Labels cannot be empty, contain path separators, drive prefixes, or control
@@ -35,7 +35,7 @@ Named accounts appear automatically as separate TUI tabs and `usage` report
 entries. Select one directly in the widget:
 
 ```bash
-ai-usagebar --vendor openrouter --account work
+ai-usagebar-omarchy --vendor openrouter --account work
 ```
 
 The default account keeps the original
@@ -56,7 +56,7 @@ accounts exist, the default entry remains visible.
 
 ```jsonc
 "custom/openrouter-work": {
-    "exec": "ai-usagebar --vendor openrouter --account work --format '{or_balance} · {or_used_today}'",
+    "exec": "ai-usagebar-omarchy --vendor openrouter --account work --format '{or_balance} · {or_used_today}'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true

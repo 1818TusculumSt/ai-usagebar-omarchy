@@ -1,6 +1,6 @@
 # Claude account guide
 
-ai-usagebar can report several Claude accounts at once. On macOS, it can also
+ai-usagebar-omarchy can report several Claude accounts at once. On macOS, it can also
 switch the active login used by Claude Desktop and the `claude` CLI.
 
 ## Choose a setup
@@ -26,7 +26,7 @@ The command:
 - creates a credentials directory for the account;
 - runs `claude` with that account's own `CLAUDE_CONFIG_DIR`.
 
-The login goes straight to the source ai-usagebar reads: a scoped Keychain item
+The login goes straight to the source ai-usagebar-omarchy reads: a scoped Keychain item
 on macOS or `.credentials.json` on Linux and Windows. The default Claude login
 is left alone. Re-run the command to sign in again, or pass `--no-login` to
 register the account without opening Claude.
@@ -38,7 +38,7 @@ a restart, provided `[anthropic]` is enabled.
 
 ```toml
 [anthropic]
-# Optional default account. Without this, ai-usagebar uses the platform default.
+# Optional default account. Without this, ai-usagebar-omarchy uses the platform default.
 # credentials_path = "~/.claude/.credentials.json"
 
 [[anthropic.accounts]]
@@ -53,14 +53,14 @@ credentials_path = "~/.config/ai-usagebar-omarchy/accounts/personal/.credentials
 Select one with `--account`:
 
 ```bash
-ai-usagebar --vendor anthropic --account work
+ai-usagebar-omarchy --vendor anthropic --account work
 ```
 
 Or use it in Waybar:
 
 ```jsonc
 "custom/claude-work": {
-    "exec": "ai-usagebar --vendor anthropic --account work --format 'w {session_pct}% · {session_reset}'",
+    "exec": "ai-usagebar-omarchy --vendor anthropic --account work --format 'w {session_pct}% · {session_reset}'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true
@@ -104,13 +104,13 @@ layout. Each subdirectory becomes an account named after the directory.
 
 - Linux stores `.credentials.json` inside the account directory.
 - macOS stores a config-dir-scoped Keychain item.
-- ai-usagebar reads and refreshes each source independently.
+- ai-usagebar-omarchy reads and refreshes each source independently.
 - Explicit `[[anthropic.accounts]]` entries override discovered accounts with
   the same label.
 - A missing or unreadable `accounts_dir` is ignored.
 
 Any account manager that uses the same directory layout can share these logins
-with ai-usagebar.
+with ai-usagebar-omarchy.
 
 ## Use existing credential files in Waybar
 
@@ -121,13 +121,13 @@ This lower-level setup is for credential files you already manage. Prefer
 "modules-right": ["custom/claude-personal", "custom/claude-work", ...],
 
 "custom/claude-personal": {
-    "exec": "ai-usagebar --vendor anthropic --icon '󰚩' --format 'p {session_pct}% · {session_reset}'",
+    "exec": "ai-usagebar-omarchy --vendor anthropic --icon '󰚩' --format 'p {session_pct}% · {session_reset}'",
     "return-type": "json",
     "interval": 300,
     "tooltip": true
 },
 "custom/claude-work": {
-    "exec": "ai-usagebar --vendor anthropic --icon '󰚩' --format 'w {session_pct}% · {session_reset}' --creds-path ~/.config/ai-usagebar-omarchy/accounts/work.credentials.json --cache-dir ~/.cache/ai-usagebar-omarchy/anthropic-work",
+    "exec": "ai-usagebar-omarchy --vendor anthropic --icon '󰚩' --format 'w {session_pct}% · {session_reset}' --creds-path ~/.config/ai-usagebar-omarchy/accounts/work.credentials.json --cache-dir ~/.cache/ai-usagebar-omarchy/anthropic-work",
     "return-type": "json",
     "interval": 300,
     "tooltip": true
@@ -186,7 +186,7 @@ use different OAuth clients, so each identity must be captured separately.
 
 ### Switch Claude Desktop
 
-Before switching, ai-usagebar merges local history into the target profile.
+Before switching, ai-usagebar-omarchy merges local history into the target profile.
 Session indexes use the newest copy; routines and schedules are merged by id.
 It then quits Desktop, swaps the credential and browser state, and reopens the
 app.
@@ -206,10 +206,10 @@ that behavior.
 
 The CLI has one default credential slot. A switch first saves the outgoing
 credential under its account, then moves the target credential into the
-default slot. ai-usagebar reads an active account from that default slot, so a
+default slot. ai-usagebar-omarchy reads an active account from that default slot, so a
 rotating refresh token is never live in two places.
 
-If the current CLI login is not managed by ai-usagebar, the switch stops before
+If the current CLI login is not managed by ai-usagebar-omarchy, the switch stops before
 discarding it. `--force` overrides that safeguard and removes the unmanaged
 login.
 
@@ -220,7 +220,7 @@ use claude-acc's format under `~/.claude-acc/profiles`; override that path with
 `[anthropic] desktop_profiles_dir`. Existing claude-acc profiles work as-is.
 
 History merges can expose deletions that another account has not seen yet.
-When that happens, ai-usagebar asks whether to keep every copy, delete the item
+When that happens, ai-usagebar-omarchy asks whether to keep every copy, delete the item
 from all accounts, or decide one item at a time. Deleting a chat removes only
 its index; transcripts under `~/.claude/projects/` are never touched.
 

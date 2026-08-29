@@ -1,6 +1,6 @@
 # Omarchy Quattro plugin
 
-This is the native Omarchy 4 frontend for ai-usagebar. It runs inside
+This is the native Omarchy 4 frontend for ai-usagebar-omarchy. It runs inside
 Quattro's long-lived Quickshell process and uses the shared Omarchy UI kit for
 the bar button, keyboard-aware panel, hero, controls, typography, spacing,
 colors, borders, and popup placement.
@@ -85,7 +85,7 @@ so an open panel stays accurate between network refreshes.
 
 Open the panel and select the gear, or press `s`, for the native QML settings
 form. It changes the same primary provider and API keys as the terminal
-Settings overlay; both write the existing ai-usagebar config in place, preserve
+Settings overlay; both write the existing ai-usagebar-omarchy config in place, preserve
 comments and unrelated fields, and retain the platform-specific config path.
 Stored key values are never sent to Quattro. The shell receives presence
 booleans only, and changed keys travel to the Rust config owner over stdin

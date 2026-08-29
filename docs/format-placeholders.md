@@ -152,12 +152,12 @@ USD; the China service uses CNY.
 
 SuperGrok is the subscription path provided by Grok Build's `x.ai/billing` ACP
 extension. It is separate from the Grok Management API prepaid balance.
-ai-usagebar never parses, copies, caches, refreshes, or sends the SuperGrok
+ai-usagebar-omarchy never parses, copies, caches, refreshes, or sends the SuperGrok
 token in ACP messages. It hashes auth and config files only to keep caches
 separate between logins.
 
 The default executable is `$GROK_HOME/bin/grok`, or `~/.grok/bin/grok` when
-`GROK_HOME` is unset. ai-usagebar does not search `PATH`. Set
+`GROK_HOME` is unset. ai-usagebar-omarchy does not search `PATH`. Set
 `[supergrok] grok_binary` only when the trusted official binary lives elsewhere.
 
 ## Anthropic API
@@ -193,7 +193,7 @@ also says that Priority Tier costs are omitted.
 A pool can exceed 100%. The default format is
 `{cursor_auto_pct}·{cursor_api_pct}%` and uses the worse pool's severity color.
 
-Cursor's dashboard also reports overage and per-member team spend; ai-usagebar
+Cursor's dashboard also reports overage and per-member team spend; ai-usagebar-omarchy
 does not. Team payloads without `individualUsage.plan` fall back to the
 dashboard's display messages and add `(team)` to the inferred plan. This path
 has not been verified against a live team account.
@@ -208,7 +208,7 @@ These describe the current credit cycle returned by
 The default format is `{kiro_pct}%`; `{session_pct}` and `{weekly_pct}` alias
 the same pool, and `{plan}` aliases the subscription title.
 
-Kiro access tokens expire after roughly an hour. ai-usagebar refreshes them
+Kiro access tokens expire after roughly an hour. ai-usagebar-omarchy refreshes them
 through the documented AWS SSO OIDC `CreateToken` API and stores refreshed or
 rotated credentials in an account-scoped `kiro/oauth.json` file. That file is
 mode `0600` on Unix. kiro-cli's database is opened read-only and is never

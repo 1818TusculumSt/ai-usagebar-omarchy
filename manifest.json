@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "AI Usage",
-    "description": "Usage windows, reset countdowns, balances, and provider switching for every provider configured in ai-usagebar.",
+    "description": "Usage windows, reset countdowns, balances, and provider switching for every provider configured in ai-usagebar-omarchy.",
     "category": "AI",
     "aliases": [
       "ai-usage",
@@ -34,7 +34,7 @@
         "key": "provider",
         "type": "string",
         "label": "Provider or account id",
-        "description": "Optional id from ai-usagebar usage --json (for example openai or anthropic@work). Leave blank to switch between all configured entries.",
+        "description": "Optional id from ai-usagebar-omarchy usage --json (for example openai or anthropic@work). Leave blank to switch between all configured entries.",
         "defaultValue": ""
       },
       {

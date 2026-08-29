@@ -8,8 +8,8 @@ bar. For configuration and how it works, see [README.md](README.md).
 | Need | How |
 |---|---|
 | **Command Line Tools** (for `swiftc`) | `xcode-select --install` |
-| **`ai-usagebar` binary** | `cargo install ai-usagebar` (lands in `~/.cargo/bin`) |
-| **Claude logged in once** | run `claude` once — its OAuth creds go to the login **Keychain**, which ai-usagebar reads automatically |
+| **`ai-usagebar-omarchy` binary** | `cargo install --git https://github.com/KyleLee/ai-usagebar-omarchy` (lands in `~/.cargo/bin`) |
+| **Claude logged in once** | run `claude` once — its OAuth creds go to the login **Keychain**, which ai-usagebar-omarchy reads automatically |
 
 ## Step by step
 
@@ -24,8 +24,8 @@ cd ai-usagebar-omarchy/macos
 ### 2. Install the binary (skip if you already have it)
 
 ```bash
-cargo install ai-usagebar
-ai-usagebar --vendor anthropic --pretty   # quick smoke test — should print bars
+cargo install --git https://github.com/KyleLee/ai-usagebar-omarchy
+ai-usagebar-omarchy --vendor anthropic --pretty   # quick smoke test — should print bars
 ```
 
 ### 3. Log in to Claude once (if you haven't)
@@ -71,7 +71,7 @@ choose **Sair/Quit**.
 ### 7. Verify it's running
 
 ```bash
-launchctl list | grep ai-usagebar          # shows the agent
+launchctl list | grep ai-usagebar-omarchy          # shows the agent
 pgrep -lf ai-usagebar-menubar               # shows the process
 ```
 
@@ -103,7 +103,7 @@ Preferences window needs macOS 12+.
 | Symptom | Fix |
 |---|---|
 | `swiftc: command not found` | `xcode-select --install`, then re-run `./build.sh` |
-| Menu bar shows `⚠ ai` | the binary wasn't found — `cargo install ai-usagebar`, or set its path; it's searched in `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, then `PATH` |
-| Menu bar shows `Loading…` and never updates | run `claude` once so creds exist; test with `ai-usagebar --vendor anthropic --pretty` |
+| Menu bar shows `⚠ ai` | the binary wasn't found — `cargo install --git https://github.com/KyleLee/ai-usagebar-omarchy`, or set its path; it's searched in `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, then `PATH` |
+| Menu bar shows `Loading…` and never updates | run `claude` once so creds exist; test with `ai-usagebar-omarchy --vendor anthropic --pretty` |
 | macOS blocks the binary (Gatekeeper) | it's your own local build — launching from Terminal / LaunchAgent is fine; if Finder blocks it, right-click → **Open** once |
 | Bars look dim on a light menu bar | bar colors are tuned for dark mode; tweak `COLOR_*` constants and rebuild |
