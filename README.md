@@ -12,6 +12,8 @@ codebase.
 
 ![Native Omarchy Quattro panel showing multiple AI quote usage, reset countdowns, and provider tabs](screenshots/omarchy-quattro-panel.png)
 
+![Native Omarchy Quattro settings form — provider account cards with API-key fields, grouped by vendor](screenshots/omarchy-quattro-settings.png)
+
 ## Features
 
 - **Z.AI / BigModel enterprise (team) subscription keys**: the same monitor
@@ -115,22 +117,22 @@ come from environment variables or `config.toml`.
 | Vendor | Method | Action required |
 |---|---|---|
 | Claude | OAuth from `~/.claude/.credentials.json` or the macOS login Keychain | Run `claude` once. Tokens refresh automatically. |
-| Anthropic API | Organization Admin key | Opt in with `ANTHROPIC_ADMIN_KEY` or `[anthropic_api] api_key`. Inference and Claude Code keys do not work. |
+| Anthropic API | Organization Admin key | Opt in with `ANTHROPIC_ADMIN_KEY` or `[anthropic_api] api_key`. Inference and Claude Code keys do not work. Extra Admin keys via `[[anthropic_api.accounts]]`, each with its own optional `monthly_limit`. |
 | Codex | OAuth, read from `~/.codex/auth.json` | Run `codex login` once. Token auto-refreshes. |
 | Z.AI | API key (`ZAI_API_KEY` env or `[zai] api_key` in config) | Set either. Team/enterprise coding-plan keys work too: set `account_type = "team"` with `organization_id` + `project_id` (see the [configuration reference](docs/configuration.md#zai--bigmodel-account-types)). Multiple keys via `[[zai.accounts]]`. |
-| OpenRouter | API key (`OPENROUTER_API_KEY` env or `[openrouter] api_key` in config) | Set either. Named keys are supported. |
-| DeepSeek | API key (`DEEPSEEK_API_KEY` or config) | Set either and opt in. |
+| OpenAI API | Organization Admin key | Opt in with `OPENAI_ADMIN_KEY` or `[openai_api] api_key`. Trailing-30-day spend from the Costs API; regular project `sk-` keys are rejected. Extra keys via `[[openai_api.accounts]]`, each with its own optional `monthly_limit`. |
+| DeepSeek | API key (`DEEPSEEK_API_KEY` or config) | Set either and opt in. Extra keys via `[[deepseek.accounts]]`. |
 | Kimi | Existing Kimi Code CLI login **or** API key (`KIMI_API_KEY` or config) | Opt in, then either log in with `kimi` (nothing to paste) or set an API key, which wins when present. A Kimi For Coding subscription can issue one at kimi.com/code/console. Extra subscriptions via `[[kimi.accounts]]`. |
-| Kilo | API key (`KILO_API_KEY` env or `[kilo] api_key` in config) | Set either. Opt-in. For a team balance, also set `[kilo] organization_id`; omit it for the personal balance. |
-| Novita | API key (`NOVITA_API_KEY` env or `[novita] api_key` in config) | Set either. Opt-in. |
-| Moonshot | API key (`MOONSHOT_API_KEY` or config) | Opt in. Set region `cn` for CNY; `global` uses USD. |
-| Grok (xAI) | Management key | Opt in with `XAI_MANAGEMENT_KEY` or config. An inference key does not work. |
+| Kilo | API key (`KILO_API_KEY` env or `[kilo] api_key` in config) | Set either. Opt-in. For a team balance, also set `[kilo] organization_id`; omit it for the personal balance. Extra keys via `[[kilo.accounts]]`. |
+| Novita | API key (`NOVITA_API_KEY` env or `[novita] api_key` in config) | Set either. Opt-in. Extra keys via `[[novita.accounts]]`. |
+| Moonshot | API key (`MOONSHOT_API_KEY` or config) | Opt in. Set region `cn` for CNY; `global` uses USD. Extra keys via `[[moonshot.accounts]]`. |
+| Grok (xAI) | Management key | Opt in with `XAI_MANAGEMENT_KEY` or config. An inference key does not work. Extra keys via `[[grok.accounts]]`. |
 | SuperGrok | Official Grok Build ACP extension | Opt in, install Grok Build, and run `grok login`. This reports subscription usage, not the Management API balance. |
-| MiniMax | Token Plan subscription key | Opt in with `MINIMAX_API_KEY` or config. Choose the matching global or China region; pay-as-you-go keys do not work. |
+| MiniMax | Token Plan subscription key | Opt in with `MINIMAX_API_KEY` or config. Choose the matching global or China region; pay-as-you-go keys do not work. Extra keys via `[[minimax.accounts]]`. |
 | Google Antigravity | Local Antigravity server | Opt in and keep Antigravity or an interactive `agy` session running. |
 | Cursor | Existing Cursor IDE or `cursor-agent` login | Opt in and sign in once. `cursor-agent` is the headless fallback. |
 | Kiro CLI | Existing kiro-cli login | Opt in and run `kiro-cli login` once. ai-usagebar-omarchy refreshes the session when needed. |
-| OpenCode Go | API key (`OPENCODE_GO_API_KEY` env or `[opencode-go] api_key` in config) | Enable `[opencode-go]`, then enter the key in the Omarchy settings panel or set the environment variable. |
+| OpenCode Go | API key (`OPENCODE_GO_API_KEY` env or `[opencode-go] api_key` in config) | Enable `[opencode-go]`, then enter the key in the Omarchy settings panel or set the environment variable. Extra keys via `[[opencode-go.accounts]]`. |
 
 ### OpenCode Go
 
@@ -448,14 +450,16 @@ Claude Desktop or CLI login. The dedicated
 - Waybar modules for personal and work subscriptions;
 - macOS Desktop and CLI switching, backups, and history conflicts.
 
-### Multiple OpenRouter accounts
+### Multiple accounts, every key vendor
 
-Add one `[[openrouter.accounts]]` entry per key, then select it with
-`--vendor openrouter --account <label>`. Named accounts appear separately in
-the TUI, native integrations, and `usage` reports. Each has its own cache, so
-one key's fresh data cannot be shown for another. See the
-[OpenRouter account guide](docs/openrouter-accounts.md) for the config and
-Waybar examples.
+Add one `[[vendor.accounts]]` entry per extra key (works for OpenRouter,
+DeepSeek, Kilo, Novita, Moonshot, Grok, MiniMax, OpenCode Go, Anthropic API,
+OpenAI API, Z.AI and Kimi), then select it positionally:
+`--vendor openrouter --account 2`. Accounts appear separately in the TUI,
+native integrations, and `usage` reports; each has its own cache, so one
+key's fresh data cannot be shown for another. See the
+[account guide](docs/openrouter-accounts.md) for the config and Waybar
+examples.
 
 ## Hyprland: float the TUI window
 

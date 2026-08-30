@@ -171,6 +171,22 @@ month-to-date spend from the Admin API `cost_report`.
 - `{plan}`, `{session_pct}`, and `{weekly_pct}` are generic aliases. Both
   percentage aliases use spend versus limit.
 
+## OpenAI API
+
+`{oai_headline}`, `{oai_spent}`, `{oai_limit}`, `{oai_pct}` report the
+trailing-30-day spend from the platform Costs API
+(`/v1/organization/costs`, Admin key).
+
+- With a positive finite `monthly_limit`, the headline looks like
+  `$1.34 / $1000 · 0%`.
+- Without a limit, it looks like `$1.34/30d`.
+- `{plan}`, `{session_pct}`, and `{weekly_pct}` are generic aliases. Both
+  percentage aliases use spend versus limit.
+
+Like the Anthropic API vendor: spend, not balance — there is no balance
+endpoint — and these organization endpoints require an **Admin key**;
+regular project `sk-` keys are rejected.
+
 This is spend, not prepaid balance. Anthropic does not expose prepaid balance
 through the API. The
 [Cost API documentation](https://platform.claude.com/docs/en/manage-claude/usage-cost-api)

@@ -145,28 +145,28 @@ omarchy bar set ai-usagebar-omarchy provider ''
 # regardless.
 omarchy bar set ai-usagebar-omarchy refreshIntervalSec 60 --json
 
-# Booleans also need --json. The default is true for drop-in compatibility.
-omarchy bar set ai-usagebar-omarchy showValue false --json
+# Booleans also need --json. Both display toggles default to ON.
+# Tiles show what is LEFT of each window (kmi 62%); flip to the used %.
+omarchy bar set ai-usagebar-omarchy showRemaining false --json
 
-# Opt in to the Waybar-style provider tag. The default is false.
-omarchy bar set ai-usagebar-omarchy showProvider true --json
+# Tile every working account side by side (default), or collapse the bar
+# to the robot icon alone.
+omarchy bar set ai-usagebar-omarchy barTiled false --json
 ```
 
 The refresh interval is clamped to 30–3600 seconds. The `provider` setting
 prefers an exact entry id; if there is no exact match, a base id such as
-`anthropic` selects all accounts for that provider. `showValue` and
-`showProvider` change only the top-bar label; neither hides report details or
-changes provider fetching.
+`anthropic` selects all accounts for that provider.
 
-`showProvider` draws the `short_name` the Rust report ships for the selected
-entry, so the codes never fork from Waybar's `{vendor_short}`: `cld 29%`,
-`gpt 95%`, `agy 81%`. Every account of one provider shares that provider's
-code — the panel and tooltip remain the place that tells `Claude · work` from
-`Claude · personal`. With both toggles on the bar reads icon + `cld 29%`; with
-`showValue` off it is the icon and `cld`. A vertical bar has room for neither
-and keeps showing the icon alone. Against an `ai-usagebar-omarchy` older than the
-`short_name` field the tag falls back to the entry id's provider half
-(`anthropic 29%`) until the binary is updated.
+**Bar layout.** Tiled (default) shows every working account side by side,
+each tile led by its provider logo — there is no module icon in front, and
+named accounts of one provider carry their number suffix (`Z.AI · 2` shows
+`2`; a provider's only key shows the logo alone). `barTiled false` is the
+opposite minimalism: the robot icon alone, a status indicator whose figures
+live in the tooltip and the click popup. The wheel cycle and the panel tabs
+stay the account selector either way; exhausted accounts (every window
+maxed or a spent balance) leave the bar until their next report shows room
+again, while tabs and popups keep them.
 
 ## Development checks
 

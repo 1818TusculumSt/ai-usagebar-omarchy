@@ -13,10 +13,10 @@ settings.
 # Which vendor the widget shows when --vendor is omitted, AND which tab
 # is selected when the TUI opens. Defaults to anthropic when not set.
 # Only a vendor that is enabled can be primary.
-# primary = "anthropic"   # anthropic | anthropic_api | openai | zai
-#                         # | openrouter | deepseek | kimi | kilo | novita
-#                         # | moonshot | grok | supergrok | antigravity | cursor
-#                         # | minimax | kiro
+# primary = "anthropic"   # anthropic | anthropic_api | openai | openai_api
+#                         # | zai | openrouter | deepseek | kimi | kilo
+#                         # | novita | moonshot | grok | supergrok | antigravity
+#                         # | cursor | minimax | kiro | opencode-go
 
 [context]
 enabled = false           # opt in, then press c in ai-usagebar-omarchy-tui
@@ -33,6 +33,22 @@ enabled = true
 enabled = true             # disabled by default; requires an organization Admin key
 
 # monthly_limit = 1000     # optional positive, finite USD display limit
+# Extra Admin keys, each with its own optional monthly_limit:
+# [[anthropic_api.accounts]]
+# api_key = "paste-another-admin-key"
+# monthly_limit = 500
+
+[openai_api]
+enabled = true             # disabled by default; requires an organization ADMIN key
+                           # (platform.openai.com → Settings → Organization;
+                           #  regular project sk- keys are rejected here).
+                           # Trailing-30-day spend from the Costs API — the
+                           # OpenAI twin of [anthropic_api] above.
+
+# monthly_limit = 1000     # optional positive, finite USD display limit
+# [[openai_api.accounts]]
+# api_key = "paste-another-admin-key"
+# monthly_limit = 500
 
 [openai]
 enabled = true
@@ -66,6 +82,8 @@ enabled = true
 
 [deepseek]
 enabled = true             # disabled by default; enable once you add an API key
+# Extra keys: [[deepseek.accounts]] with just api_key — the shared
+# multi-account shape every key vendor takes.
 
 
 [kimi]
@@ -87,6 +105,9 @@ enabled = true             # disabled by default; a Kimi Code CLI login is enoug
 enabled = true             # disabled by default; enable once you add an API key
 
 # region = "global"        # global -> api.minimax.io | cn -> api.minimaxi.com
+# Extra keys, each its own entry everywhere: [[minimax.accounts]] with just
+# api_key (auto-named 1, 2, … by position) — the shared multi-account shape
+# every key vendor takes.
 
 # --- Account-balance vendors (all opt-in) ---
 
@@ -94,15 +115,24 @@ enabled = true             # disabled by default; enable once you add an API key
 enabled = true             # disabled by default; enable once you add an API key
 
 # organization_id = "org_..."   # team balance; omit for the personal balance
+# Extra keys, each its own entry everywhere: [[kilo.accounts]] with just
+# api_key (auto-named 1, 2, … by position) — the shared multi-account shape
+# every key vendor takes.
 
 [novita]
 enabled = true             # disabled by default; enable once you add an API key
+# Extra keys, each its own entry everywhere: [[novita.accounts]] with just
+# api_key (auto-named 1, 2, … by position) — the shared multi-account shape
+# every key vendor takes.
 
 
 [moonshot]
 enabled = true             # disabled by default; enable once you add an API key
 
 # region = "global"        # global → api.moonshot.ai (USD) | cn → api.moonshot.cn (CNY)
+# Extra keys, each its own entry everywhere: [[moonshot.accounts]] with just
+# api_key (auto-named 1, 2, … by position) — the shared multi-account shape
+# every key vendor takes.
 
 [grok]
 enabled = true             # disabled by default; enable once you add an API key
@@ -110,6 +140,9 @@ enabled = true             # disabled by default; enable once you add an API key
 
 # Required for organization-scoped keys; auto-resolved for team-scoped ones.
 # team_id = "..."
+# Extra keys, each its own entry everywhere: [[grok.accounts]] with just
+# api_key (auto-named 1, 2, … by position) — the shared multi-account shape
+# every key vendor takes.
 
 [supergrok]
 enabled = true             # disabled by default; enable once you've run `grok login`
@@ -129,6 +162,11 @@ enabled = true             # disabled by default; enable once you've signed in t
 # fallback when the IDE database is absent.
 # db_path = "/home/you/.config/Cursor/User/globalStorage/state.vscdb"
 # agent_auth_path = "/home/you/.config/cursor/auth.json"
+
+[opencode-go]
+enabled = true             # disabled by default; enable once you add an API key
+# Extra keys: [[opencode-go.accounts]] with just api_key — the shared
+# multi-account shape every key vendor takes.
 
 [kiro]
 enabled = true             # disabled by default; enable once you've run `kiro-cli login`

@@ -9,11 +9,12 @@ ai-usagebar-omarchy 最初是
 
 ![Omarchy Quattro 原生面板：AI 配额用量、重置倒计时与供应商标签页](screenshots/omarchy-quattro-panel.png)
 
+![Omarchy Quattro 原生设置界面：按供应商分组的账号卡片与 API 密钥输入](screenshots/omarchy-quattro-settings.png)
+
 ## 功能特性
 
 - **Z.AI / BigModel 企业（团队）订阅密钥**：同一监控端点加 `?type=2` 与组织/项目请求头——按密钥配置计费类型即可，站点（z.ai / bigmodel.cn）自动检测。按量付费密钥自动降级为 7 天用量统计。
 - **Z.AI 与 Kimi 多账号**（`[[zai.accounts]]` / `[[kimi.accounts]]`）：每把密钥在任务栏有独立磁贴、在 TUI 有独立标签页、独立缓存——通过原生设置表单（添加/重命名/删除、逐卡 Apply）或在 `config.toml` 中管理。
-- **自定义显示名称**：命名账号的任务栏磁贴以你起的名字开头（`kimi-main 42%·2h 05m 15%·2d 3h`）；未命名则显示供应商名（`kimi 37%·2d 5h`）。名字同时是 `--account <label>` 选择器。
 - **任务栏逐窗口分级配色**：5 小时与周窗口各自是独立的 Text 对象，按各自剩余量着色——绿色 ≥50%、黄色 <50%、橙色 <20%、红色 <5%——因此同一磁贴里绿色 5 小时图可以与橙色周图并存；账号标签恒为主题前景色，不随用量变化。各窗口带自己的重置倒计时（`42%·2h 05m 15%·2d 3h`；未启动的窗口显示 `0%·-`）。
 - 每供应商 Waybar 模块使用与 claudebar 相同的 JSON 结构和参数。
 - Omarchy Quattro 原生插件跟随 shell 主题，支持键盘导航、供应商切换、实时重置计时器与过期/错误状态。
@@ -75,22 +76,23 @@ Claude 与 Codex 复用官方 CLI 的 OAuth 凭据。其他供应商使用 API �
 | 供应商 | 方式 | 需要做什么 |
 |---|---|---|
 | Claude | 来自 `~/.claude/.credentials.json` 或 macOS 登录钥匙串的 OAuth | 运行一次 `claude`。令牌自动刷新。 |
-| Anthropic API | 组织管理员密钥 | 用 `ANTHROPIC_ADMIN_KEY` 或 `[anthropic_api] api_key` 启用。推理与 Claude Code 密钥无效。 |
+| Anthropic API | 组织管理员密钥 | 用 `ANTHROPIC_ADMIN_KEY` 或 `[anthropic_api] api_key` 启用。推理与 Claude Code 密钥无效。多把 Admin 密钥用 `[[anthropic_api.accounts]]`，每把可带自己的 `monthly_limit`。 |
 | Codex | OAuth，读取 `~/.codex/auth.json` | 运行一次 `codex login`。令牌自动刷新。 |
+| OpenAI API | 组织管理员密钥 | 用 `OPENAI_ADMIN_KEY` 或 `[openai_api] api_key` 启用。Costs API 的近 30 天消费；普通项目 `sk-` 密钥会被拒绝。多把密钥用 `[[openai_api.accounts]]`，每把可带自己的 `monthly_limit`。 |
 | Z.AI | API 密钥（`ZAI_API_KEY` 环境变量或配置 `[zai] api_key`） | 任选其一。团队/企业订阅密钥同样支持：设 `account_type = "team"` 加 `organization_id` + `project_id`（见[配置参考](docs/configuration.md#zai--bigmodel-account-types)）。多把密钥用 `[[zai.accounts]]`。 |
-| OpenRouter | API 密钥（`OPENROUTER_API_KEY` 环境变量或配置） | 任选其一。支持命名密钥。 |
-| DeepSeek | API 密钥（`DEEPSEEK_API_KEY` 或配置） | 任选其一并启用。 |
+| OpenRouter | API 密钥（`OPENROUTER_API_KEY` 环境变量或配置） | 任选其一。多把密钥用 `[[openrouter.accounts]]`。 |
+| DeepSeek | API 密钥（`DEEPSEEK_API_KEY` 或配置） | 任选其一并启用。多把密钥用 `[[deepseek.accounts]]`。 |
 | Kimi | 已有 Kimi Code CLI 登录**或** API 密钥（`KIMI_API_KEY` 或配置） | 启用后，用 `kimi` 登录（无需粘贴）或设 API 密钥（存在时优先）。Kimi For Coding 订阅可在 kimi.com/code/console 签发密钥。多个订阅用 `[[kimi.accounts]]`。 |
-| Kilo | API 密钥（`KILO_API_KEY` 环境变量或配置） | 任选其一，需启用。团队余额另设 `[kilo] organization_id`；省略则为个人余额。 |
-| Novita | API 密钥（`NOVITA_API_KEY` 环境变量或配置） | 任选其一，需启用。 |
-| Moonshot | API 密钥（`MOONSHOT_API_KEY` 或配置） | 需启用。区域 `cn` 显示人民币；`global` 用美元。 |
-| Grok (xAI) | 管理密钥 | 用 `XAI_MANAGEMENT_KEY` 或配置启用。推理密钥无效。 |
+| Kilo | API 密钥（`KILO_API_KEY` 环境变量或配置） | 任选其一，需启用。团队余额另设 `[kilo] organization_id`；省略则为个人余额。多把密钥用 `[[kilo.accounts]]`。 |
+| Novita | API 密钥（`NOVITA_API_KEY` 环境变量或配置） | 任选其一，需启用。多把密钥用 `[[novita.accounts]]`。 |
+| Moonshot | API 密钥（`MOONSHOT_API_KEY` 或配置） | 需启用。区域 `cn` 显示人民币；`global` 用美元。多把密钥用 `[[moonshot.accounts]]`。 |
+| Grok (xAI) | 管理密钥 | 用 `XAI_MANAGEMENT_KEY` 或配置启用。推理密钥无效。多把密钥用 `[[grok.accounts]]`。 |
 | SuperGrok | 官方 Grok Build ACP 扩展 | 需启用，安装 Grok Build 并运行 `grok login`。显示订阅用量而非 Management API 余额。 |
-| MiniMax | Token Plan 订阅密钥 | 用 `MINIMAX_API_KEY` 或配置启用。选择对应 global 或国内区域；按量付费密钥无效。 |
+| MiniMax | Token Plan 订阅密钥 | 用 `MINIMAX_API_KEY` 或配置启用。选择对应 global 或国内区域；按量付费密钥无效。多把密钥用 `[[minimax.accounts]]`。 |
 | Google Antigravity | 本地 Antigravity 服务 | 需启用并保持 Antigravity 或交互式 `agy` 会话运行。 |
 | Cursor | 已有 Cursor IDE 或 `cursor-agent` 登录 | 需启用并登录一次。`cursor-agent` 为无头回退。 |
 | Kiro CLI | 已有 kiro-cli 登录 | 需启用并运行一次 `kiro-cli login`。ai-usagebar-omarchy 按需刷新会话。 |
-| OpenCode Go | API 密钥（`OPENCODE_GO_API_KEY` 环境变量或配置） | 需启用，在 Omarchy 设置面板输入密钥或设环境变量。 |
+| OpenCode Go | API 密钥（`OPENCODE_GO_API_KEY` 环境变量或配置） | 需启用，在 Omarchy 设置面板输入密钥或设环境变量。多把密钥用 `[[opencode-go.accounts]]`。 |
 
 ### OpenCode Go
 
@@ -380,13 +382,14 @@ macOS 上，同一账号命令还能捕获并切换当前 Claude Desktop 或 CLI
 - 个人与工作订阅的 Waybar 模块；
 - macOS Desktop 与 CLI 切换、备份与历史冲突。
 
-### 多个 OpenRouter 账号
+### 多账号（全部 key 型供应商）
 
-每把密钥加一条 `[[openrouter.accounts]]`，用
-`--vendor openrouter --account <label>` 选择。命名账号在 TUI、原生集成与
-`usage` 报告中独立显示。各自独立缓存，一把密钥的新鲜数据不会展示为另一把的。
-配置与 Waybar 示例见
-[OpenRouter 账号指南](docs/openrouter-accounts.md)。
+每把额外密钥加一条 `[[vendor.accounts]]`（OpenRouter、DeepSeek、Kilo、
+Novita、Moonshot、Grok、MiniMax、OpenCode Go、Anthropic API、OpenAI API、
+Z.AI、Kimi 通用），按位置选择：`--vendor openrouter --account 2`。账号在
+TUI、原生集成与 `usage` 报告中独立显示。各自独立缓存，一把密钥的新鲜
+数据不会展示为另一把的。配置与 Waybar 示例见
+[账号指南](docs/openrouter-accounts.md)。
 
 ## Hyprland：TUI 浮动窗口
 
