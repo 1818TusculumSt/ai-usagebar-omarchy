@@ -13,20 +13,21 @@ vm.runInContext(source, model, {filename: 'Model.js'});
 const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 assert.deepEqual(manifest.kinds, ['bar-widget']);
 assert.equal(manifest.entryPoints.barWidget, 'omarchy/BarWidget.qml');
-// Tiling and showing the value are unconditional now — no toggles left
-// for either; only the used/remaining switch remains.
+// The value/provider toggles stay gone; tiling is back as a boolean
+// (default on — the tiled bar every user already has) next to the
+// used/remaining switch.
 assert.equal(manifest.barWidget.defaults.showValue, undefined);
 assert.equal(manifest.barWidget.schema.find(row => row.key === 'showValue'), undefined);
-// showProvider is gone — tile tags follow the name/provider rule and the
-// single-entry label never carried a code worth toggling.
 assert.equal(manifest.barWidget.defaults.showProvider, undefined);
 assert.equal(manifest.barWidget.schema.find(row => row.key === 'showProvider'), undefined);
-assert.equal(manifest.barWidget.defaults.barTiled, undefined);
-assert.equal(manifest.barWidget.schema.find(row => row.key === 'barTiled'), undefined);
 assert.equal(manifest.barWidget.defaults.showRemaining, true);
 const showRemainingSchema = manifest.barWidget.schema.find(row => row.key === 'showRemaining');
 assert.equal(showRemainingSchema.type, 'boolean');
 assert.equal(showRemainingSchema.defaultValue, true);
+assert.equal(manifest.barWidget.defaults.barTiled, true);
+const barTiledSchema = manifest.barWidget.schema.find(row => row.key === 'barTiled');
+assert.equal(barTiledSchema.type, 'boolean');
+assert.equal(barTiledSchema.defaultValue, true);
 
 const barWidgetSource = fs.readFileSync(new URL('./BarWidget.qml', import.meta.url), 'utf8');
 assert.match(barWidgetSource, /^BarWidget\s*\{/m);
@@ -50,7 +51,10 @@ assert.match(panelSource, /setting\("showRemaining",\s*true\)/);
 assert.match(panelSource, /setting\("showRemaining",\s*true\)/);
 assert.match(panelSource, /onShowRemainingRequested/);
 assert.doesNotMatch(panelSource, /setting\("showValue"/);
-assert.doesNotMatch(panelSource, /setting\("barTiled"/);
+// Tiling is a setting again, default on; the panel reads it and can flip it.
+assert.match(panelSource, /setting\("barTiled",\s*true\)/);
+assert.match(panelSource, /function\s+setBarTiled\s*\(/);
+assert.match(panelSource, /onBarTiledRequested/);
 assert.match(panelSource, /function\s+persistSelection\s*\(/);
 assert.match(panelSource, /Model\.settingsWithOverrides\(root\.settings,\s*root\.moduleName,\s*values\)/);
 assert.match(panelSource, /bar\.shell\.updateEntryInline\(root\.moduleName,\s*entry\)/);
@@ -76,11 +80,12 @@ assert.match(panelSource, /panelFlick\.contentY = Math\.min\(root\.savedSettings
 // Each draft carries its own Apply button right under the key field — the
 // global save at the page bottom is below the fold exactly when it matters.
 assert.match(settingsViewSource, /text: root\.saving \? "Saving…" : "Apply"/);
-// New drafts come pre-named Z.AI (auto-incrementing) — zero typing to add
-// a key, and multiple pre-named drafts can never collide on save.
-assert.match(settingsViewSource, /function nextDraftName\(vendor\)/);
-assert.match(settingsViewSource, /draftName = root\.nextDraftName\(draftVendor\)/);
-assert.match(settingsViewSource, /while \(taken\[base \+ " " \+ n\]\) n\+\+/);
+// Drafts no longer name accounts client-side: the form asks for no name and
+// the server auto-names on add (Z.AI, Z.AI 2 …). The old pre-naming
+// machinery must not creep back.
+assert.doesNotMatch(settingsViewSource, /function nextDraftName/);
+assert.doesNotMatch(settingsViewSource, /draftName/);
+assert.match(settingsViewSource, /action: "add", vendor: draftVendor, fields: fields/);
 // Accounts render in ONE root-level section (zai's proven shape): no
 // per-vendor delegate sections — those hid `accountRepeater` from root
 // functions and silently killed every save (and the back button via
@@ -88,22 +93,22 @@ assert.match(settingsViewSource, /while \(taken\[base \+ " " \+ n\]\) n\+\+/);
 assert.equal(settingsViewSource.indexOf('id: vendorSection'), -1,
   'per-vendor delegate sections must not come back');
 assert.match(settingsViewSource, /text: "ACCOUNTS"/);
-// ONE add button (the side-by-side zai/kimi pair read as an extra stray
-// button); the vendor is chosen inside the draft.
-assert.match(settingsViewSource, /text: "Add account"/);
-assert.doesNotMatch(settingsViewSource, /Add Z\.AI account/);
-assert.doesNotMatch(settingsViewSource, /Add Kimi account/);
-assert.match(settingsViewSource, /onClicked: root\.addDraftAccount\(\)/);
-assert.match(settingsViewSource, /function switchVendor\(vendor\)/);
-assert.match(settingsViewSource, /draftCard\.nameTouched = true/);
+// ONE add button PER VENDOR, right under that vendor's last key — the
+// button label comes from Rust's vendor_display, never a frontend table.
+assert.doesNotMatch(settingsViewSource, /text: "Add account"/);
+assert.match(settingsViewSource, /"Add " \+ row\.modelData\.vendorDisplay \+ " Account"/);
+assert.match(settingsViewSource, /onClicked: root\.addDraftAccount\(row\.modelData\.vendor\)/);
+// The draft's vendor is fixed by its button — no in-draft provider picker.
+assert.doesNotMatch(settingsViewSource, /function switchVendor/);
 // Card mutations carry the card's own vendor — the hardcoded "zai" here
 // once wrote kimi keys into the [zai] section.
-assert.doesNotMatch(settingsViewSource, /vendor: "zai"/);
-assert.match(settingsViewSource, /vendor: card\.modelData\.vendor/);
-// draftVendor snapshots at creation; a binding would flip older drafts
-// when the other vendor's Add button is used.
-assert.match(settingsViewSource, /draftVendor = root\.addDraftVendor/);
-assert.match(settingsViewSource, /"Kimi · " : "Z\.AI · "/);
+assert.doesNotMatch(settingsViewSource, /vendor: shape\.card\.vendor \|\|/);
+assert.match(settingsViewSource, /vendor: shape\.card\.vendor/);
+// Card titles render Rust's vendor_display — no zai/kimi string table here.
+assert.doesNotMatch(settingsViewSource, /"Kimi \. " : "Z\.AI \. "/);
+// Drafts key by vendor section id; the array only changes on clicks.
+assert.match(settingsViewSource, /drafts = drafts\.concat\(\[vendor\]\)/);
+assert.match(settingsViewSource, /function removeDraftAt\(index\)/);
 // Zero accounts still shows the section (its Add buttons are the entry
 // point when nothing is configured).
 {
@@ -112,9 +117,20 @@ assert.match(settingsViewSource, /"Kimi · " : "Z\.AI · "/);
     'accounts section must not require accounts to exist');
 }
 assert.match(settingsViewSource, /label:\s*"Show remaining instead of used"/);
-assert.doesNotMatch(settingsViewSource, /label:\s*"Tile every account in the top bar"/);
+// Tiling is a visible toggle again (default on); the value toggle stays out.
+assert.match(settingsViewSource, /label:\s*"Tile every account in the top bar"/);
 assert.doesNotMatch(settingsViewSource, /label:\s*"Show usage value in the top bar"/);
-assert.match(settingsViewSource, /model:\s*root\.snapshot\.keys/);
+// The plain API KEYS section is gone — every key vendor is an account card.
+assert.doesNotMatch(settingsViewSource, /text: "API KEYS"/);
+assert.doesNotMatch(settingsViewSource, /snapshot\.keys/);
+// One vendor-grouped model drives the whole section; group prefix bars
+// alternate two colors by GROUP INDEX (Z.AI blue, Kimi purple, then
+// alternating down the list) — not by a per-vendor table.
+assert.match(settingsViewSource, /function accountsModel\(\)/);
+assert.match(settingsViewSource, /model: root\.accountsModel\(\)/);
+assert.match(settingsViewSource, /g % 2 === 0 \? "#61afef" : "#c678dd"/);
+assert.match(settingsViewSource, /color: row\.modelData\.accent/);
+assert.doesNotMatch(settingsViewSource, /function vendorAccent/);
 assert.doesNotMatch(settingsViewSource, /Nous/);
 assert.doesNotMatch(panelSource, /openNousLogin/);
 assert.doesNotMatch(settingsViewSource, /command:\s*\[[^\]]*(?:api.?key|secret|pendingPayload)/i);
@@ -221,9 +237,9 @@ assert.equal(model.barLabel(false, false, true, false, true, '29%'), '󰚩  29%'
 assert.equal(model.barLabel(false, false, false, false, true, '29%'), '󰚩');
 assert.equal(model.barLabel(true, false, true, false, true, '95%'), '󰚩  95%');
 assert.equal(model.barLabel(true, false, false, false, true, '95%'), '󰚩');
-assert.equal(model.barLabel(true, false, true, false, false, ''), '󰅙');
+assert.equal(model.barLabel(true, false, true, false, false, ''), '󰚩');
 assert.equal(model.barLabel(false, true, true, false, true, '29%'), '󰚩');
-assert.equal(model.barLabel(true, true, true, false, true, '95%'), '󰅙');
+assert.equal(model.barLabel(true, true, true, false, true, '95%'), '󰚩');
 assert.equal(model.barLabel(false, false, true, true, false, ''), '󰚩  …');
 
 // The provider tag is opt-in and arrives already resolved, so every call
@@ -238,7 +254,7 @@ assert.equal(model.barLabel(false, false, true, false, true, '', 'agy'), '󰚩  
 assert.equal(model.barLabel(false, true, true, false, true, '29%', 'gpt'), '󰚩');
 // Before the first report there is no provider to name.
 assert.equal(model.barLabel(false, false, true, true, false, '', 'gpt'), '󰚩  …');
-assert.equal(model.barLabel(true, false, true, false, false, '', 'gpt'), '󰅙');
+assert.equal(model.barLabel(true, false, true, false, false, '', 'gpt'), '󰚩');
 // A tag that sanitizes down to nothing degrades to the label without one.
 assert.equal(model.barLabel(false, false, true, false, true, '29%', '   '), '󰚩  29%');
 assert.equal(model.barLabel(false, false, true, false, true, '29%', undefined), '󰚩  29%');
@@ -246,7 +262,7 @@ assert.equal(model.barLabel(false, false, true, false, true, '29%', undefined), 
 // --- Tiled bar (every account at once, the old GNOME panel layout) --------
 // Fixed clock for the countdown assertions.
 const tileNow = Date.parse('2026-08-29T12:00:00Z');
-// A window resetting 2h05m from tileNow → compact "2h".
+// A window resetting 2h05m from tileNow → compact "2h" (2.08h truncated).
 const resetAt2h = '2026-08-29T14:05:00Z';
 
 // Tags: named accounts use their own label, default accounts the vendor code.
@@ -266,9 +282,9 @@ const kimiTile = model.parseReport(JSON.stringify({entries: [{
      detail: '', severity: 'low', reset_at: resetAt2h, window: 'session'}
   ]}
 ]})).entries[0];
-assert.equal(model.tileLabel(kimiTile, true, false, tileNow), 'kimi 38%·2h 5m');
+assert.equal(model.tileLabel(kimiTile, true, false, tileNow), 'kimi 38%·2h');
 // showRemaining flips the figure to what is left of the same window.
-assert.equal(model.tileLabel(kimiTile, true, true, tileNow), 'kimi 62%·2h 5m');
+assert.equal(model.tileLabel(kimiTile, true, true, tileNow), 'kimi 62%·2h');
 // headline carries the winning metric's reset for the tile to use.
 assert.equal(model.headline(kimiTile).reset_at, resetAt2h);
 // An unstarted window (no reset) keeps the countdown slot with a dash.
@@ -280,7 +296,7 @@ const unstarted = model.parseReport(JSON.stringify({entries: [{
      detail: '', severity: 'mid', reset_at: resetAt2h, window: 'weekly'}
   ]}
 ]})).entries[0];
-assert.equal(model.tileLabel(unstarted, true, false, tileNow), 'kimi 0%·- 37%·2h 5m');
+assert.equal(model.tileLabel(unstarted, true, false, tileNow), 'kimi 0%·- 37%·2h');
 // Both windows tile, each with its own reset: 5h first, weekly second.
 const twoWindow = model.parseReport(JSON.stringify({entries: [{
   id: 'kimi', error: null, sections: [
@@ -290,8 +306,8 @@ const twoWindow = model.parseReport(JSON.stringify({entries: [{
      detail: '', severity: 'mid', reset_at: '2026-09-01T14:05:00Z', window: 'weekly'}
   ]}
 ]})).entries[0];
-assert.equal(model.tileLabel(twoWindow, true, false, tileNow), 'kimi 38%·2h 5m 37%·3d 2h');
-assert.equal(model.tileLabel(twoWindow, true, true, tileNow), 'kimi 62%·2h 5m 63%·3d 2h');
+assert.equal(model.tileLabel(twoWindow, true, false, tileNow), 'kimi 38%·2h 37%·3d');
+assert.equal(model.tileLabel(twoWindow, true, true, tileNow), 'kimi 62%·2h 63%·3d');
 // A reset in the past reads as due.
 const dueTile = model.parseReport(JSON.stringify({entries: [{
   id: 'zai', short_name: 'zai', error: null, sections: [
@@ -314,7 +330,7 @@ assert.equal(model.tileLabel(parsed.entries[0], false, false, tileNow), 'work');
 // The tiled label joins one tile per WORKING account with a vertical bar;
 // unnamed defaults carry the provider name, named accounts their name only.
 assert.equal(model.tiledBarLabel(false, false, true, false, parsed.entries, false, tileNow),
-  '󰚩  work 29%·due  │  openai 95%·-');
+  'anthropic 29%·due│openai 95%·-');
 // Balance-style figures ride along like percentages do (no reset appended).
 assert.equal(model.tiledBarLabel(false, false, true, false,
   model.parseReport(JSON.stringify({entries: [
@@ -323,7 +339,8 @@ assert.equal(model.tiledBarLabel(false, false, true, false,
     ]},
     {id: 'deepseek', short_name: 'dsk', error: null,
      sections: [{type: 'text', label: 'Balance', value: '$8.42'}]}
-  ]})).entries, false, tileNow), '󰚩  team 42%·-  │  deepseek $8.42');
+  ]})).entries, false, tileNow), 'zai 42%·-│deepseek $8.42',
+  'the solo zai key drops its suffix — the logo alone identifies it');
 // "unconfigured" is the calm third state: same remedy text, no alarm.
 const unconfiguredReport = model.parseReport(JSON.stringify({entries: [{
   id: 'zai', error: 'credentials error: Zai: no API key. Either set an API key …',
@@ -340,6 +357,156 @@ assert.equal(unconfiguredReport[1].status, 'ready');
 assert.equal(unconfiguredReport[2].status, 'error');
 assert.equal(model.isAlarming(unconfiguredReport[0]), false, 'absence is not an alarm');
 assert.equal(model.isAlarming(unconfiguredReport[2]), true);
+
+// --- Logos, exhaustion, and the tiling toggle --------------------------------
+// The report carries each vendor's logo asset id; entries default to no
+// logo (older binaries) and not-exhausted.
+{
+  const withLogo = model.parseReport(JSON.stringify({entries: [
+    {id: 'anthropic@work', logo: 'claude', error: null, sections: []},
+    {id: 'zai', error: null, sections: []}
+  ]})).entries;
+  assert.equal(withLogo[0].logo, 'claude');
+  assert.equal(withLogo[1].logo, '');
+  assert.equal(withLogo[0].exhausted, false);
+  assert.equal(model.logoAssetName('claude'), 'claude.svg');
+  assert.equal(model.logoAssetName('nope'), '');
+  assert.equal(model.logoAssetName(''), '');
+  // Every shipped asset id is a Rust logo_slug — the lockstep set the
+  // branding test on the Rust side walks, mirrored here so a new vendor
+  // that ships without an asset fails CI on the frontend too.
+  assert.deepEqual(Object.keys(model.LOGO_ASSETS).sort(), [
+    'anthropic', 'antigravity', 'claude', 'cursor', 'deepseek', 'grok',
+    'kilo', 'kimi', 'kiro', 'minimax', 'moonshot', 'novita', 'openai',
+    'opencode', 'openrouter', 'zai'
+  ]);
+  // And every mapped file actually ships with the plugin — a dangling
+  // mapping degrades the bar tile silently otherwise.
+  for (const [slug, file] of Object.entries(model.LOGO_ASSETS))
+    assert.equal(fs.existsSync(new URL(`./logos/${file}`, import.meta.url)), true,
+      `logo asset ${slug} → ${file} is missing`);
+}
+
+// The tag part carries the logo id and the label that renders beside it:
+// the account suffix for named accounts, "" for vendor defaults. `text`
+// stays the full tag so a missing asset falls back to the old tile.
+{
+  const mkEntry = (id, logo) => model.parseReport(JSON.stringify({entries: [{
+    id: id, logo: logo, error: null, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 42, value: '42%',
+       detail: '', severity: 'low', reset_at: resetAt2h, window: 'session'}
+    ]}
+  ]})).entries[0];
+  const named = model.tileParts(mkEntry('zai@team', 'zai'), true, false, tileNow)[0];
+  assert.equal(named.text, 'team');
+  assert.equal(named.logo, 'zai');
+  assert.equal(named.logoLabel, 'team');
+  const unnamed = model.tileParts(mkEntry('zai', 'zai'), true, false, tileNow)[0];
+  assert.equal(unnamed.text, 'zai');
+  assert.equal(unnamed.logo, 'zai');
+  assert.equal(unnamed.logoLabel, '', 'a default account is the logo alone');
+  const legacy = model.tileParts(mkEntry('zai', ''), true, false, tileNow)[0];
+  assert.equal(legacy.logo, '', 'older binaries carry no logo id');
+  assert.equal(legacy.text, 'zai', 'and keep the text tag');
+}
+
+// A provider's ONLY key drops its account suffix — a lone "1" beside the
+// logo distinguishes it from nothing. Two keys under one provider keep
+// their suffixes; an exhausted (bar-hidden) sibling still counts, so the
+// suffix returns the moment it does.
+{
+  const soloEntry = id => model.parseReport(JSON.stringify({entries: [{
+    id: id, logo: 'zai', error: null, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 42, value: '42%',
+       detail: '', severity: 'low', reset_at: resetAt2h, window: 'session'}
+    ]}
+  ]})).entries[0];
+  // Solo, explicit: the tag degrades to the provider name and the label
+  // beside the logo disappears — exactly a default account's tile.
+  const solo = model.tileParts(soloEntry('zai@1'), true, false, tileNow, true)[0];
+  assert.equal(solo.text, 'zai');
+  assert.equal(solo.logo, 'zai');
+  assert.equal(solo.logoLabel, '');
+  // Without the flag (an older caller) nothing changes.
+  const keep = model.tileParts(soloEntry('zai@1'), true, false, tileNow)[0];
+  assert.equal(keep.text, '1');
+  assert.equal(keep.logoLabel, '1');
+
+  const providerPair = model.parseReport(JSON.stringify({entries: [
+    {id: 'zai@1', logo: 'zai', error: null, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 42, value: '42%',
+       detail: '', severity: 'low', window: 'session'}
+    ]},
+    {id: 'zai@2', logo: 'zai', error: null, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 10, value: '10%',
+       detail: '', severity: 'low', window: 'session'}
+    ]},
+    {id: 'kimi@1', logo: 'kimi', error: null, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 30, value: '30%',
+       detail: '', severity: 'low', window: 'session'}
+    ]}
+  ]})).entries;
+  // Two zai keys: suffixes stay (they are what distinguishes the tiles);
+  // the lone kimi key drops its "1".
+  assert.equal(model.tiledBarLabel(false, false, true, false, providerPair, false, tileNow),
+    '1 42%·-│2 10%·-│kimi 30%·-');
+  // An exhausted sibling still counts: zai@1 hidden, but zai@2 keeps "2".
+  const exhaustedPair = model.parseReport(JSON.stringify({entries: [
+    {id: 'zai@1', logo: 'zai', error: null, exhausted: true, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 100, value: '100%',
+       detail: '', severity: 'critical', window: 'session'}
+    ]},
+    {id: 'zai@2', error: null, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 10, value: '10%',
+       detail: '', severity: 'low', window: 'session'}
+    ]}
+  ]})).entries;
+  assert.equal(model.tiledBarLabel(false, false, true, false, exhaustedPair, false, tileNow),
+    '2 10%·-');
+}
+
+// Exhausted entries leave the bar but never the tabs: `exhausted` comes
+// from Rust (any window maxed / balance spent), `barEntries` applies it,
+// `readyEntries` (tabs) ignores it.
+{
+  const exhaustion = model.parseReport(JSON.stringify({entries: [
+    {id: 'zai', error: null, exhausted: true, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 100, value: '100%',
+       detail: '', severity: 'critical', window: 'session'}
+    ]},
+    {id: 'kimi', error: null, sections: [
+      {type: 'metric', label: 'Session (5h)', percent: 30, value: '30%',
+       detail: '', severity: 'low', window: 'session'}
+    ]},
+    {id: 'deepseek', error: 'HTTP 401', sections: []}
+  ]})).entries;
+  assert.deepEqual(Array.from(model.barEntries(exhaustion), e => e.id), ['kimi']);
+  assert.deepEqual(Array.from(model.readyEntries(exhaustion), e => e.id), ['zai', 'kimi'],
+    'tabs keep the exhausted account');
+  assert.deepEqual(Array.from(model.barTileEntries(exhaustion, 'kimi', true), e => e.id), ['kimi']);
+  // Tiling off: the SELECTED entry alone — and an exhausted selection is
+  // skipped for the first tileable account, never rendered as a tile.
+  assert.deepEqual(Array.from(model.barTileEntries(exhaustion, 'zai', false), e => e.id), ['kimi']);
+  assert.deepEqual(Array.from(model.barTileEntries(exhaustion, 'kimi', false), e => e.id), ['kimi']);
+  assert.deepEqual(Array.from(model.barTileEntries(exhaustion, 'missing', false), e => e.id), ['kimi']);
+  assert.equal(model.barTileEntries([], 'x', false).length, 0);
+  // The tiled label itself hides the exhausted tile.
+  assert.equal(model.tiledBarLabel(false, false, true, false, exhaustion, false, tileNow),
+    'kimi 30%·-');
+  assert.equal(model.tiledBarLabel(false, false, true, false, [exhaustion[0]], false, tileNow),
+    '󰚩', 'every tile gone → the robot alone');
+}
+
+// Fresh install: a report where EVERY entry is unconfigured has no tab and
+// no tile; the panel opens straight into settings (source assertions below).
+{
+  const fresh = model.parseReport(JSON.stringify({entries: [
+    {id: 'zai', error: 'credentials error: Zai: no API key. Either …', unconfigured: true, sections: []},
+    {id: 'openai', error: 'credentials error: Codex: no auth file at …', unconfigured: true, sections: []}
+  ]})).entries;
+  assert.equal(model.readyEntries(fresh).length, 0);
+  assert.equal(model.barEntries(fresh).length, 0);
+}
 
 // Per-agent tile colors: the least remaining across shown windows drives
 // the class; the colorFor callback renders rich text (HTML-escaped).
@@ -371,8 +538,8 @@ assert.equal(model.isAlarming(unconfiguredReport[2]), true);
   };
   assert.deepEqual(plain(model.tileParts(mk(1, 52), true, false, tileNow)), [
     { text: 'a', cls: '' },
-    { text: '1%·2h 5m', cls: 'low' },
-    { text: '52%·2h 5m', cls: 'mid' }
+    { text: '1%·2h', cls: 'low' },
+    { text: '52%·2h', cls: 'mid' }
   ]);
   // Band edges on remaining: 13% left → orange (high), 47% left → yellow.
   assert.equal(model.remainingClass(87), 'high'); // 13% remaining
@@ -382,14 +549,14 @@ assert.equal(model.isAlarming(unconfiguredReport[2]), true);
   // And the mirror: a critical 5h window beside a healthy weekly one —
   // the split goes both ways, never one color for the whole key.
   const mirror = plain(model.tileParts(mk(96, 8), true, false, tileNow));
-  assert.deepEqual(mirror[1], { text: '96%·2h 5m', cls: 'critical' });
-  assert.deepEqual(mirror[2], { text: '8%·2h 5m', cls: 'low' });
+  assert.deepEqual(mirror[1], { text: '96%·2h', cls: 'critical' });
+  assert.deepEqual(mirror[2], { text: '8%·2h', cls: 'low' });
   // tileLabel stays the joined form of the parts.
-  assert.equal(model.tileLabel(mk(1, 52), true, false, tileNow), 'a 1%·2h 5m 52%·2h 5m');
+  assert.equal(model.tileLabel(mk(1, 52), true, false, tileNow), 'a 1%·2h 52%·2h');
   // showRemaining flips the figures; the classes stay remaining-based.
   const flipped = plain(model.tileParts(mk(1, 52), true, true, tileNow));
-  assert.deepEqual(flipped[1], { text: '99%·2h 5m', cls: 'low' });
-  assert.deepEqual(flipped[2], { text: '48%·2h 5m', cls: 'mid' });
+  assert.deepEqual(flipped[1], { text: '99%·2h', cls: 'low' });
+  assert.deepEqual(flipped[2], { text: '48%·2h', cls: 'mid' });
   // Balance-style accounts keep the single headline part, class-less.
   assert.deepEqual(plain(model.tileParts(model.parseReport(JSON.stringify({entries: [
     {id: 'deepseek', error: null, sections: [
@@ -399,16 +566,21 @@ assert.equal(model.isAlarming(unconfiguredReport[2]), true);
     { text: '$8.42', cls: '' }
   ]);
 
-  // Two-component countdowns: the 5h window keeps its minutes, the weekly
-  // window its hours; a zero component is omitted rather than shown as 0.
+  // One-unit countdowns, mirroring Rust's `countdown::format_compact`:
+  // minutes under an hour, decimal hours under a day, decimal days above.
   assert.equal(model.compactReset('', tileNow), '');
   assert.equal(model.compactReset('2026-08-29T11:00:00Z', tileNow), 'due');
   assert.equal(model.compactReset('2026-08-29T12:40:00Z', tileNow), '40m');
+  assert.equal(model.compactReset('2026-08-29T12:00:30Z', tileNow), '1m');
   assert.equal(model.compactReset('2026-08-29T13:00:00Z', tileNow), '1h');
-  assert.equal(model.compactReset('2026-08-29T14:05:00Z', tileNow), '2h 5m');
-  assert.equal(model.compactReset('2026-08-29T16:07:00Z', tileNow), '4h 7m');
+  assert.equal(model.compactReset('2026-08-29T14:05:00Z', tileNow), '2h');
+  assert.equal(model.compactReset('2026-08-29T16:07:00Z', tileNow), '4.1h');
+  assert.equal(model.compactReset('2026-08-29T17:12:00Z', tileNow), '5.2h');
+  assert.equal(model.compactReset('2026-08-29T11:59:59Z', tileNow), 'due');
+  assert.equal(model.compactReset('2026-08-30T11:59:00Z', tileNow), '23.9h');
   assert.equal(model.compactReset('2026-08-30T12:00:00Z', tileNow), '1d');
-  assert.equal(model.compactReset('2026-09-01T14:05:00Z', tileNow), '3d 2h');
+  assert.equal(model.compactReset('2026-09-01T14:05:00Z', tileNow), '3d');
+  assert.equal(model.compactReset('2026-09-04T15:05:00Z', tileNow), '6.1d');
 
   // The worst band across entries drives the vertical bar's severity dot;
   // non-ready entries never contribute (the icon itself goes urgent there).
@@ -421,16 +593,44 @@ assert.equal(model.isAlarming(unconfiguredReport[2]), true);
   ]})).entries[0];
   assert.equal(model.worstBand([brokenEntry, mk(10, 5)]), 'low');
 }
-// The bar renders ONE Text PER TILE PART (Panel.barLabelModels +
-// BarWidget's Repeater) — the tag and each window figure are separate
-// objects with their own color property, not shared rich text whose spans
-// a CSS quirk can drop wholesale (the all-white episode).
+// The bar renders ONE PART PER TILE (Panel.barLabelModels + BarWidget's
+// Repeater) — the tag and each window figure are separate objects with
+// their own color property, not shared rich text whose spans a CSS quirk
+// can drop wholesale (the all-white episode).
 assert.match(panelSource, /function barLabelModels\(\)/);
 assert.match(panelSource, /Model\.tileParts\(/);
+// Bar tiles come from barTileEntries: tiling honors the setting, and an
+// exhausted account never tiles.
+assert.match(panelSource, /Model\.barTileEntries\(visibleEntries, selectedEntryId, barTiled\)/);
+// A provider's only key drops its suffix — counts come from the report.
+assert.match(panelSource, /Model\.providerEntryCounts\(visibleEntries\)/);
+assert.match(panelSource, /var solo = counts\[Model\.baseProvider\(working\[w\]\.id\)\] <= 1/);
+// Icon policy: the tiled bar starts straight at the tiles (every tile leads
+// with its vendor logo — a module robot in front is pure redundancy), and
+// single-account mode (tiling off) is the robot ALONE.
+assert.match(panelSource, /if \(!barTiled\) \{\s*\n\s*\/\/ Not tiling: the robot alone/);
+assert.match(panelSource, /if \(items\.length > 0\) push\("│", root\.dim, "sep"\)/);
+// The robot glyph NEVER swaps to the alert mark — not even at zero
+// remaining; alarms travel through the urgent color only.
+assert.doesNotMatch(panelSource, /󰅙/);
+// Tile dividers carry almost no padding: 2px each side in BarWidget, and
+// the pure-string join has no spaces at all.
+assert.match(barWidgetSource, /role === "sep" \? 2/);
+// Fresh install: a report where every entry is unconfigured opens the
+// settings form once — the form IS the panel content until a key lands.
+assert.match(panelSource, /function maybeAutoOpenSettings\(\)/);
+assert.match(panelSource, /autoSettingsDone = true/);
+assert.match(panelSource, /status !== "unconfigured"/);
 assert.match(barWidgetSource, /labelVisible: false/);
 assert.match(barWidgetSource, /keepSpace: true/);
 assert.match(barWidgetSource, /root\.panelItem\.barLabelModels\(\)/);
 assert.match(barWidgetSource, /color: modelData\.color/);
+// The tag part renders as the vendor's LOGO when a bundled asset exists
+// (named accounts keep their suffix text beside it); anything else is the
+// plain text fallback — the tile never blanks out over a missing file.
+assert.match(barWidgetSource, /import "Model\.js" as Model/);
+assert.match(barWidgetSource, /Model\.logoAssetName\(tilePart\.logo\)/);
+assert.match(barWidgetSource, /Qt\.resolvedUrl\("logos\/" \+ Model\.logoAssetName\(tilePart\.logo\)\)/);
 
 // The hero's trailing buttons keep clear of the scrollbar overlay.
 assert.match(panelSource, /width: Style\.space\(6\)\n\s+height: 1/);
@@ -440,11 +640,12 @@ assert.match(panelSource, /panelFlick\.contentY = Math\.min\(root\.savedSettings
 // Each draft carries its own Apply button right under the key field — the
 // global save at the page bottom is below the fold exactly when it matters.
 assert.match(settingsViewSource, /text: root\.saving \? "Saving…" : "Apply"/);
-// New drafts come pre-named Z.AI (auto-incrementing) — zero typing to add
-// a key, and multiple pre-named drafts can never collide on save.
-assert.match(settingsViewSource, /function nextDraftName\(vendor\)/);
-assert.match(settingsViewSource, /draftName = root\.nextDraftName\(draftVendor\)/);
-assert.match(settingsViewSource, /while \(taken\[base \+ " " \+ n\]\) n\+\+/);
+// Drafts no longer name accounts client-side: the form asks for no name and
+// the server auto-names on add (Z.AI, Z.AI 2 …). The old pre-naming
+// machinery must not creep back.
+assert.doesNotMatch(settingsViewSource, /function nextDraftName/);
+assert.doesNotMatch(settingsViewSource, /draftName/);
+assert.match(settingsViewSource, /action: "add", vendor: draftVendor, fields: fields/);
 // Accounts render in ONE root-level section (zai's proven shape): no
 // per-vendor delegate sections — those hid `accountRepeater` from root
 // functions and silently killed every save (and the back button via
@@ -452,22 +653,22 @@ assert.match(settingsViewSource, /while \(taken\[base \+ " " \+ n\]\) n\+\+/);
 assert.equal(settingsViewSource.indexOf('id: vendorSection'), -1,
   'per-vendor delegate sections must not come back');
 assert.match(settingsViewSource, /text: "ACCOUNTS"/);
-// ONE add button (the side-by-side zai/kimi pair read as an extra stray
-// button); the vendor is chosen inside the draft.
-assert.match(settingsViewSource, /text: "Add account"/);
-assert.doesNotMatch(settingsViewSource, /Add Z\.AI account/);
-assert.doesNotMatch(settingsViewSource, /Add Kimi account/);
-assert.match(settingsViewSource, /onClicked: root\.addDraftAccount\(\)/);
-assert.match(settingsViewSource, /function switchVendor\(vendor\)/);
-assert.match(settingsViewSource, /draftCard\.nameTouched = true/);
+// ONE add button PER VENDOR, right under that vendor's last key — the
+// button label comes from Rust's vendor_display, never a frontend table.
+assert.doesNotMatch(settingsViewSource, /text: "Add account"/);
+assert.match(settingsViewSource, /"Add " \+ row\.modelData\.vendorDisplay \+ " Account"/);
+assert.match(settingsViewSource, /onClicked: root\.addDraftAccount\(row\.modelData\.vendor\)/);
+// The draft's vendor is fixed by its button — no in-draft provider picker.
+assert.doesNotMatch(settingsViewSource, /function switchVendor/);
 // Card mutations carry the card's own vendor — the hardcoded "zai" here
 // once wrote kimi keys into the [zai] section.
-assert.doesNotMatch(settingsViewSource, /vendor: "zai"/);
-assert.match(settingsViewSource, /vendor: card\.modelData\.vendor/);
-// draftVendor snapshots at creation; a binding would flip older drafts
-// when the other vendor's Add button is used.
-assert.match(settingsViewSource, /draftVendor = root\.addDraftVendor/);
-assert.match(settingsViewSource, /"Kimi · " : "Z\.AI · "/);
+assert.doesNotMatch(settingsViewSource, /vendor: shape\.card\.vendor \|\|/);
+assert.match(settingsViewSource, /vendor: shape\.card\.vendor/);
+// Card titles render Rust's vendor_display — no zai/kimi string table here.
+assert.doesNotMatch(settingsViewSource, /"Kimi \. " : "Z\.AI \. "/);
+// Drafts key by vendor section id; the array only changes on clicks.
+assert.match(settingsViewSource, /drafts = drafts\.concat\(\[vendor\]\)/);
+assert.match(settingsViewSource, /function removeDraftAt\(index\)/);
 // Zero accounts still shows the section (its Add buttons are the entry
 // point when nothing is configured).
 {
@@ -476,9 +677,20 @@ assert.match(settingsViewSource, /"Kimi · " : "Z\.AI · "/);
     'accounts section must not require accounts to exist');
 }
 assert.match(settingsViewSource, /label:\s*"Show remaining instead of used"/);
-assert.doesNotMatch(settingsViewSource, /label:\s*"Tile every account in the top bar"/);
+// Tiling is a visible toggle again (default on); the value toggle stays out.
+assert.match(settingsViewSource, /label:\s*"Tile every account in the top bar"/);
 assert.doesNotMatch(settingsViewSource, /label:\s*"Show usage value in the top bar"/);
-assert.match(settingsViewSource, /model:\s*root\.snapshot\.keys/);
+// The plain API KEYS section is gone — every key vendor is an account card.
+assert.doesNotMatch(settingsViewSource, /text: "API KEYS"/);
+assert.doesNotMatch(settingsViewSource, /snapshot\.keys/);
+// One vendor-grouped model drives the whole section; group prefix bars
+// alternate two colors by GROUP INDEX (Z.AI blue, Kimi purple, then
+// alternating down the list) — not by a per-vendor table.
+assert.match(settingsViewSource, /function accountsModel\(\)/);
+assert.match(settingsViewSource, /model: root\.accountsModel\(\)/);
+assert.match(settingsViewSource, /g % 2 === 0 \? "#61afef" : "#c678dd"/);
+assert.match(settingsViewSource, /color: row\.modelData\.accent/);
+assert.doesNotMatch(settingsViewSource, /function vendorAccent/);
 assert.doesNotMatch(settingsViewSource, /Nous/);
 assert.doesNotMatch(panelSource, /openNousLogin/);
 assert.doesNotMatch(settingsViewSource, /command:\s*\[[^\]]*(?:api.?key|secret|pendingPayload)/i);
@@ -498,7 +710,7 @@ assert.equal(model.preferredEntryId(readyFirst, '', ''), 'kimi');
 assert.equal(model.preferredEntryId(readyFirst, '', 'zai'), 'kimi');
 // Unconfigured entries tile no more than errors do — the panel keeps them.
 assert.equal(model.tiledBarLabel(false, false, true, false, unconfiguredReport, false, tileNow),
-  '󰚩  Z.AI 42%·-');
+  'Z.AI 42%·-');
 
 // Misconfigured entries (no key, broken config) stay OFF the bar…
 const mixedEntries = model.parseReport(JSON.stringify({entries: [
@@ -508,15 +720,15 @@ const mixedEntries = model.parseReport(JSON.stringify({entries: [
   ]}
 ]})).entries;
 assert.equal(model.tiledBarLabel(false, false, true, false, mixedEntries, false, tileNow),
-  '󰚩  zai 42%·-');
+  'zai 42%·-');
 // …and when every account is broken, the alert icon alone points at the panel.
-assert.equal(model.tiledBarLabel(false, false, true, false, [mixedEntries[0]], false, tileNow), '󰅙');
+assert.equal(model.tiledBarLabel(false, false, true, false, [mixedEntries[0]], false, tileNow), '󰚩');
 // Empty/loading/vertical states mirror barLabel's.
 assert.equal(model.tiledBarLabel(false, false, true, true, [], false, tileNow), '󰚩  …');
-assert.equal(model.tiledBarLabel(true, false, true, false, [], false, tileNow), '󰅙');
-assert.equal(model.tiledBarLabel(true, true, true, false, parsed.entries, false, tileNow), '󰅙');
+assert.equal(model.tiledBarLabel(true, false, true, false, [], false, tileNow), '󰚩');
+assert.equal(model.tiledBarLabel(true, true, true, false, parsed.entries, false, tileNow), '󰚩');
 assert.equal(model.tiledBarLabel(false, false, false, false, parsed.entries, false, tileNow),
-  '󰚩  work  │  openai');
+  'anthropic│openai');
 
 // The codes come from Rust's VendorId::short_name via the report; the vendor
 // half of the machine id only stands in for a binary that predates the field.
@@ -660,7 +872,7 @@ const accountsRaw = JSON.stringify({
   keys: [{id: 'deepseek', label: 'DeepSeek', environment: 'DEEPSEEK_API_KEY', note: '', configured: false,
     inline_configured: false, environment_configured: false}],
   accounts: [
-    {vendor: 'zai', label: '', display: 'Default', environment: 'ZAI_API_KEY',
+    {vendor: 'zai', vendor_display: 'Z.AI', label: '', display: 'Default', environment: 'ZAI_API_KEY',
      configured: true, inline_configured: true, environment_configured: false,
      fields: [
        {id: 'site', label: 'Site', kind: 'choice', value: '', choices: ['', 'global', 'cn'],
@@ -669,7 +881,7 @@ const accountsRaw = JSON.stringify({
         choices: ['personal', 'team', 'usage']},
        {id: 'api_key', label: 'API key', kind: 'secret', value: ''}
      ]},
-    {vendor: 'zai', label: 'team', display: 'team', environment: '(per-account env or inline)',
+    {vendor: 'zai', vendor_display: 'Z.AI', label: 'team', display: 'team', environment: '(per-account env or inline)',
      configured: false, inline_configured: false, environment_configured: false,
      fields: [
        {id: 'name', label: 'Name', kind: 'text', value: 'team'},
@@ -688,6 +900,7 @@ assert.equal(accountsParsed.ok, true);
 assert.equal(accountsParsed.accounts.length, 2);
 assert.equal(accountsParsed.accounts[0].label, '');
 assert.equal(accountsParsed.accounts[0].display, 'Default');
+assert.equal(accountsParsed.accounts[0].vendor_display, 'Z.AI');
 assert.equal(accountsParsed.accounts[0].fields[2].kind, 'secret');
 assert.equal(accountsParsed.accounts[1].label, 'team');
 assert.equal(accountsParsed.accounts[1].fields[0].id, 'name');
@@ -717,10 +930,20 @@ assert.deepEqual(JSON.parse(accountPatch.payload).accounts.zai, [
   {action: 'add', name: 'payg', fields: {account_type: 'usage'}},
   {action: 'remove', label: 'old'}
 ]);
-// An add without a name is rejected before stdin.
-assert.equal(model.buildSettingsPatch('', [], [
+// An add without a name (or with whitespace) goes through name-less: the
+// server auto-names it. The patch carries no `name` for those.
+const namelessAdd = model.buildSettingsPatch('', [], [
   {action: 'add', vendor: 'zai', name: '  '}
-]).ok, false);
+]);
+assert.equal(namelessAdd.ok, true);
+assert.deepEqual(JSON.parse(namelessAdd.payload).accounts.zai,
+  [{action: 'add'}]);
+const bareAdd = model.buildSettingsPatch('', [], [
+  {action: 'add', vendor: 'kimi', apiKey: {action: 'set', value: 'k'}}
+]);
+assert.equal(bareAdd.ok, true);
+assert.deepEqual(JSON.parse(bareAdd.payload).accounts.kimi,
+  [{action: 'add', api_key: {action: 'set', value: 'k'}}]);
 // Default-section updates use the empty label.
 const defaultUpdate = model.buildSettingsPatch('', [], [
   {action: 'update', vendor: 'zai', label: '', fields: {account_type: 'team'}}

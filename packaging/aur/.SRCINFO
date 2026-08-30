@@ -1,6 +1,6 @@
 pkgbase = ai-usagebar-omarchy
 	pkgdesc = Omarchy/Waybar widgets + TUI for tracking multi-provider AI plan usage
-	pkgver = 1.8.0
+	pkgver = 1.9.0
 	pkgrel = 1
 	url = https://github.com/KyleLee/ai-usagebar-omarchy
 	arch = x86_64
@@ -17,7 +17,7 @@ pkgbase = ai-usagebar-omarchy
 	conflicts = ai-usagebar
 	options = !lto
 	options = !debug
-	source = ai-usagebar-omarchy-1.8.0.tar.gz::https://github.com/KyleLee/ai-usagebar-omarchy/archive/refs/tags/v1.8.0.tar.gz
+	source = ai-usagebar-omarchy-1.9.0.tar.gz::https://github.com/KyleLee/ai-usagebar-omarchy/archive/refs/tags/v1.9.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = ai-usagebar-omarchy

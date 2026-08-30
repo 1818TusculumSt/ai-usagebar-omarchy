@@ -350,6 +350,7 @@ pub enum VendorSnapshot {
     Grok(GrokSnapshot),
     SuperGrok(SuperGrokSnapshot),
     AnthropicApi(AnthropicApiSnapshot),
+    OpenaiApi(OpenAiApiSnapshot),
     Antigravity(AntigravitySnapshot),
     Cursor(CursorSnapshot),
     Minimax(MinimaxSnapshot),
@@ -411,6 +412,30 @@ pub struct AnthropicApiSnapshot {
 impl Eq for AnthropicApiSnapshot {}
 
 impl AnthropicApiSnapshot {
+    /// Spend as an integer percentage of the configured limit; `None` when no
+    /// positive limit is set.
+    pub fn pct(&self) -> Option<i32> {
+        self.limit
+            .filter(|l| l.is_finite() && *l > 0.0)
+            .map(|l| ((self.spent / l) * 100.0).round().clamp(0.0, 9999.0) as i32)
+    }
+}
+
+/// OpenAI Admin API — trailing-30-day billed dollars from the Costs API.
+/// Like the Anthropic Admin vendor: spend, not balance (there is no balance
+/// endpoint), against a self-configured optional limit. `by_day` and
+/// `top_items` are the aggregate detail the panel block renders.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenAiApiSnapshot {
+    pub spent: f64,
+    pub by_day: Vec<(chrono::NaiveDate, f64)>,
+    pub top_items: Vec<(String, f64)>,
+    pub limit: Option<f64>,
+}
+
+impl Eq for OpenAiApiSnapshot {}
+
+impl OpenAiApiSnapshot {
     /// Spend as an integer percentage of the configured limit; `None` when no
     /// positive limit is set.
     pub fn pct(&self) -> Option<i32> {

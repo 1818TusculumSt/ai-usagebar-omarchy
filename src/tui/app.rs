@@ -92,14 +92,18 @@ impl TabId {
 /// [`tabs_with_desktop`]; this stays for the hermetic unit tests and any caller
 /// that only wants configured accounts.
 pub fn tabs_from_config(config: &Config) -> Vec<TabId> {
-    build_tabs(config, &[])
+    build_tabs(config, &[], &DefaultCreds::detect(config))
 }
 
 /// The production aggregate-view tab list: configured accounts plus every saved
 /// Claude Desktop profile that has usable credentials. Desktop discovery is
 /// best-effort and macOS-only; anywhere else this equals [`tabs_from_config`].
 pub fn tabs_with_desktop(config: &Config) -> Vec<TabId> {
-    build_tabs(config, &desktop_profile_labels(config))
+    build_tabs(
+        config,
+        &desktop_profile_labels(config),
+        &DefaultCreds::detect(config),
+    )
 }
 
 /// Core expansion, parameterized on the Desktop account labels so it stays pure
@@ -114,7 +118,73 @@ pub fn tabs_with_desktop(config: &Config) -> Vec<TabId> {
 /// authenticates but reports another account's (often zero) usage, which no
 /// credential-health check can catch. The app-maintained Desktop token is the
 /// one source that avoids both the rotation war and that silent misattribution.
-fn build_tabs(config: &Config, desktop_labels: &[String]) -> Vec<TabId> {
+/// Whether each vendor's DEFAULT section carries a credential, for the tab
+/// builder. An unconfigured default is not a tab worth showing once
+/// numbered accounts exist — the settings panel's Add flow puts keys ON
+/// accounts, so a keyless default next to working accounts is exactly the
+/// dead "GLM / Kimi" node that clutters the tab strip. Injectable so tests
+/// stay hermetic (no ambient env vars, no real `~/.kimi-code`).
+pub(crate) struct DefaultCreds<'a> {
+    pub env_set: &'a dyn Fn(&str) -> bool,
+    pub kimi_cli_login: bool,
+}
+
+impl DefaultCreds<'_> {
+    /// The production detector (config-aware for the kimi login override).
+    pub fn detect(config: &Config) -> DefaultCreds<'static> {
+        DefaultCreds {
+            env_set: &|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()),
+            kimi_cli_login: crate::kimi::cli_login_present(&config.kimi),
+        }
+    }
+}
+
+/// Whether a key-account vendor's default section is configured: an inline
+/// key, its env var, or (kimi only) the CLI's own OAuth login.
+fn default_credential_present(config: &Config, vendor: VendorId, creds: &DefaultCreds) -> bool {
+    let (inline, env): (Option<&str>, &str) = match vendor {
+        VendorId::Zai => (config.zai.api_key.as_deref(), &config.zai.api_key_env),
+        VendorId::Kimi => (config.kimi.api_key.as_deref(), &config.kimi.api_key_env),
+        VendorId::Openrouter => (
+            config.openrouter.api_key.as_deref(),
+            &config.openrouter.api_key_env,
+        ),
+        VendorId::Deepseek => (
+            config.deepseek.api_key.as_deref(),
+            &config.deepseek.api_key_env,
+        ),
+        VendorId::Kilo => (config.kilo.api_key.as_deref(), &config.kilo.api_key_env),
+        VendorId::Novita => (config.novita.api_key.as_deref(), &config.novita.api_key_env),
+        VendorId::Moonshot => (
+            config.moonshot.api_key.as_deref(),
+            &config.moonshot.api_key_env,
+        ),
+        VendorId::Grok => (config.grok.api_key.as_deref(), &config.grok.api_key_env),
+        VendorId::Minimax => (
+            config.minimax.api_key.as_deref(),
+            &config.minimax.api_key_env,
+        ),
+        VendorId::OpenCodeGo => (
+            config.opencode_go.api_key.as_deref(),
+            &config.opencode_go.api_key_env,
+        ),
+        VendorId::AnthropicApi => (
+            config.anthropic_api.api_key.as_deref(),
+            &config.anthropic_api.api_key_env,
+        ),
+        VendorId::OpenaiApi => (
+            config.openai_api.api_key.as_deref(),
+            &config.openai_api.api_key_env,
+        ),
+        _ => return true,
+    };
+    if vendor == VendorId::Kimi && creds.kimi_cli_login {
+        return true;
+    }
+    inline.is_some_and(|key| !key.is_empty()) || (creds.env_set)(env)
+}
+
+fn build_tabs(config: &Config, desktop_labels: &[String], creds: &DefaultCreds) -> Vec<TabId> {
     let desktop_set: HashSet<&str> = desktop_labels.iter().map(String::as_str).collect();
     let mut tabs = Vec::new();
     for vendor in config.enabled_vendors() {
@@ -139,25 +209,29 @@ fn build_tabs(config: &Config, desktop_labels: &[String]) -> Vec<TabId> {
             for label in desktop_labels {
                 tabs.push(TabId::desktop_account(label.clone()));
             }
-        } else if vendor == VendorId::Openrouter {
-            if config.openrouter.show_default_account || config.openrouter.accounts.is_empty() {
-                tabs.push(TabId::vendor(vendor));
-            }
-            for account in &config.openrouter.accounts {
-                tabs.push(TabId::account_for(vendor, account.label.clone()));
-            }
         } else if vendor == VendorId::Zai {
-            if config.zai.show_default_account || config.zai.accounts.is_empty() {
+            // A keyless default next to numbered accounts is a dead node —
+            // hide it unless it actually carries a credential.
+            if config.zai.accounts.is_empty()
+                || (config.zai.show_default_account
+                    && default_credential_present(config, vendor, creds))
+            {
                 tabs.push(TabId::vendor(vendor));
             }
             for account in &config.zai.accounts {
                 tabs.push(TabId::account_for(vendor, account.label.clone()));
             }
-        } else if vendor == VendorId::Kimi {
-            if config.kimi.show_default_account || config.kimi.accounts.is_empty() {
+        } else if let Some(accounts) = config.key_accounts(vendor) {
+            // Every key-based vendor expands the same way: the default tab
+            // only when it is credentialed (or nothing else exists), then
+            // one tab per numbered account.
+            if accounts.is_empty()
+                || (config.key_show_default(vendor)
+                    && default_credential_present(config, vendor, creds))
+            {
                 tabs.push(TabId::vendor(vendor));
             }
-            for account in &config.kimi.accounts {
+            for account in accounts {
                 tabs.push(TabId::account_for(vendor, account.label.clone()));
             }
         } else {
@@ -433,6 +507,37 @@ pub async fn refresh_one(client: &Client, config: &Config, tab: &TabId) -> TabSt
     }
 }
 
+/// Resolve the API key for a key-account vendor's tab: the numbered
+/// account's key when the tab addresses one, the section default otherwise.
+fn key_account_api_key(
+    config: &Config,
+    vendor: VendorId,
+    display: &str,
+    section: &str,
+    default_env: &str,
+    default_key: Option<&str>,
+    tab: &TabId,
+) -> Result<String> {
+    match tab.account.as_deref() {
+        Some(label) => crate::config::resolve_key_account(
+            display,
+            section,
+            config.key_accounts(vendor).unwrap_or_default(),
+            label,
+        ),
+        None => crate::config::resolve_api_key(display, default_env, default_key),
+    }
+}
+
+/// Cache for a key-account vendor's tab: account-scoped when addressed, the
+/// vendor default otherwise.
+fn key_account_cache(slug: &str, tab: &TabId) -> Result<crate::cache::Cache> {
+    match tab.account.as_deref() {
+        Some(label) => crate::cache::Cache::for_vendor_account(slug, label),
+        None => crate::cache::Cache::for_vendor(slug),
+    }
+}
+
 async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<VendorOutcome> {
     match tab.vendor {
         VendorId::Anthropic => {
@@ -462,7 +567,7 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 &creds_target,
                 &cache,
                 &endpoints,
-                DEFAULT_TTL,
+                crate::cache::GENTLE_TTL,
             )
             .await?;
             Ok(crate::vendor::VendorOutcome {
@@ -473,12 +578,27 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             })
         }
         VendorId::AnthropicApi => {
-            let key = crate::config::resolve_api_key(
+            // Numbered accounts carry their own Admin key and MAY carry
+            // their own monthly limit (each key is its own organization);
+            // the section limit stays the default account's.
+            let key = key_account_api_key(
+                config,
+                VendorId::AnthropicApi,
                 "Anthropic_API",
+                "anthropic_api",
                 &config.anthropic_api.api_key_env,
                 config.anthropic_api.api_key.as_deref(),
+                tab,
             )?;
-            let cache = crate::cache::Cache::for_vendor("anthropic_api")?;
+            let cache = key_account_cache("anthropic_api", tab)?;
+            let limit = match tab.account.as_deref().and_then(|label| {
+                config
+                    .key_accounts(VendorId::AnthropicApi)
+                    .and_then(|accounts| accounts.iter().find(|a| a.label == label))
+            }) {
+                Some(account) => account.monthly_limit.or(config.anthropic_api.monthly_limit),
+                None => config.anthropic_api.monthly_limit,
+            };
             let endpoints = crate::anthropic_api::fetch::Endpoints::default();
             let outcome = crate::anthropic_api::fetch_snapshot(
                 client,
@@ -486,7 +606,7 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 &cache,
                 &endpoints,
                 DEFAULT_TTL,
-                config.anthropic_api.monthly_limit,
+                limit,
             )
             .await?;
             Ok(outcome.into())
@@ -537,9 +657,48 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 .clone()
                 .unwrap_or_else(|| crate::openai::creds::default_path().unwrap_or_default());
             let endpoints = crate::openai::fetch::Endpoints::default();
-            let outcome =
-                crate::openai::fetch_snapshot(client, &creds_path, &cache, &endpoints, DEFAULT_TTL)
-                    .await?;
+            let outcome = crate::openai::fetch_snapshot(
+                client,
+                &creds_path,
+                &cache,
+                &endpoints,
+                crate::cache::GENTLE_TTL,
+            )
+            .await?;
+            Ok(outcome.into())
+        }
+        VendorId::OpenaiApi => {
+            // Same shape as AnthropicApi: numbered accounts carry their own
+            // Admin key and MAY their own monthly limit; GENTLE_TTL because
+            // the costs data is daily-bucket reporting.
+            let key = key_account_api_key(
+                config,
+                VendorId::OpenaiApi,
+                "OpenAI API",
+                "openai_api",
+                &config.openai_api.api_key_env,
+                config.openai_api.api_key.as_deref(),
+                tab,
+            )?;
+            let cache = key_account_cache("openai_api", tab)?;
+            let limit = match tab.account.as_deref().and_then(|label| {
+                config
+                    .key_accounts(VendorId::OpenaiApi)
+                    .and_then(|accounts| accounts.iter().find(|a| a.label == label))
+            }) {
+                Some(account) => account.monthly_limit.or(config.openai_api.monthly_limit),
+                None => config.openai_api.monthly_limit,
+            };
+            let endpoints = crate::openai_api::fetch::Endpoints::default();
+            let outcome = crate::openai_api::fetch_snapshot(
+                client,
+                &key,
+                &cache,
+                &endpoints,
+                crate::cache::GENTLE_TTL,
+                limit,
+            )
+            .await?;
             Ok(outcome.into())
         }
         VendorId::Deepseek => {
@@ -628,16 +787,20 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             Ok(outcome.into())
         }
         VendorId::Grok => {
-            let key = crate::config::resolve_api_key(
+            let api_key = key_account_api_key(
+                config,
+                VendorId::Grok,
                 "Grok",
+                "grok",
                 &config.grok.api_key_env,
                 config.grok.api_key.as_deref(),
+                tab,
             )?;
-            let cache = crate::cache::Cache::for_vendor("grok")?;
+            let cache = key_account_cache("grok", tab)?;
             let endpoints = crate::grok::fetch::Endpoints::default();
             let outcome = crate::grok::fetch_snapshot(
                 client,
-                &key,
+                &api_key,
                 &cache,
                 &endpoints,
                 DEFAULT_TTL,
@@ -885,6 +1048,14 @@ mod tests {
         assert_eq!(app.overview_tabs(), vec![1]);
     }
 
+    /// Hermetic creds for tab tests: no env vars, no CLI login.
+    fn no_creds() -> DefaultCreds<'static> {
+        DefaultCreds {
+            env_set: &|_| false,
+            kimi_cli_login: false,
+        }
+    }
+
     fn config_with_accounts(labels: &[&str]) -> Config {
         let mut config = Config::default();
         // Keep only Anthropic enabled so the test asserts on account expansion,
@@ -950,6 +1121,92 @@ mod tests {
         assert!(tabs.iter().all(|t| t.account.is_none()));
     }
 
+    /// The reported bug: a keyless GLM/Kimi default node sits in the tab
+    /// strip next to working numbered accounts. The default only keeps its
+    /// tab when it carries a credential (inline key, env var, or — kimi
+    /// only — the CLI's own OAuth login); `show_default_account = false`
+    /// still hides even a credentialed one.
+    #[test]
+    fn keyless_defaults_hide_once_numbered_accounts_exist() {
+        let mut config = Config::default();
+        config.anthropic.enabled = false;
+        config.openai.enabled = false;
+        config.openrouter.enabled = false;
+        config.kimi.enabled = true;
+        config.zai.accounts = vec![crate::config::ZaiAccount {
+            label: "1".into(),
+            api_key: Some("k1".into()),
+            api_key_env: None,
+            plan_tier: None,
+            account_type: crate::config::ZaiAccountType::Personal,
+            organization_id: None,
+            project_id: None,
+            site: None,
+        }];
+        config.kimi.accounts = vec![crate::config::KimiAccount {
+            label: "1".into(),
+            api_key: Some("k2".into()),
+            api_key_env: None,
+            monthly_limit: None,
+        }];
+        let tabs = build_tabs(&config, &[], &no_creds());
+        assert_eq!(
+            tabs,
+            vec![
+                TabId::account_for(VendorId::Zai, "1"),
+                TabId::account_for(VendorId::Kimi, "1"),
+            ],
+            "keyless defaults are dead nodes — gone"
+        );
+
+        // A credentialed kimi default (the CLI login) keeps its tab.
+        let creds_with_login = DefaultCreds {
+            env_set: &|_| false,
+            kimi_cli_login: true,
+        };
+        let tabs = build_tabs(&config, &[], &creds_with_login);
+        assert_eq!(
+            tabs,
+            vec![
+                TabId::account_for(VendorId::Zai, "1"),
+                TabId::vendor(VendorId::Kimi),
+                TabId::account_for(VendorId::Kimi, "1"),
+            ]
+        );
+
+        // An env-var default counts as credentialed too.
+        let creds_with_env = DefaultCreds {
+            env_set: &|name| name == "ZAI_API_KEY",
+            kimi_cli_login: false,
+        };
+        let tabs = build_tabs(&config, &[], &creds_with_env);
+        assert_eq!(tabs[0], TabId::vendor(VendorId::Zai));
+
+        // show_default_account = false hides even a credentialed default.
+        config.kimi.api_key = Some("default-kimi".into());
+        config.kimi.show_default_account = false;
+        let tabs = build_tabs(&config, &[], &no_creds());
+        assert_eq!(
+            tabs,
+            vec![
+                TabId::account_for(VendorId::Zai, "1"),
+                TabId::account_for(VendorId::Kimi, "1"),
+            ]
+        );
+
+        // No accounts at all: the default shows even unconfigured (the
+        // fresh-install entry point).
+        config.zai.accounts.clear();
+        config.kimi.accounts.clear();
+        config.kimi.show_default_account = true;
+        config.kimi.api_key = None;
+        let tabs = build_tabs(&config, &[], &no_creds());
+        assert_eq!(
+            tabs,
+            vec![TabId::vendor(VendorId::Zai), TabId::vendor(VendorId::Kimi)]
+        );
+    }
+
     #[test]
     fn tabs_expand_openrouter_accounts_without_changing_other_vendors() {
         let mut config = Config::default();
@@ -961,17 +1218,31 @@ mod tests {
                 label: "work".into(),
                 api_key_env: Some("OPENROUTER_WORK_API_KEY".into()),
                 api_key: None,
-            },
+            
+            monthly_limit: None,},
             crate::config::OpenRouterAccount {
                 label: "personal".into(),
                 api_key_env: None,
                 api_key: Some("personal-key".into()),
-            },
+            
+            monthly_limit: None,},
         ];
+        // The default keeps its tab because it carries its own inline key —
+        // a CREDENTIALED default next to numbered accounts stays.
+        config.openrouter.api_key = Some("default-key".into());
         assert_eq!(
-            tabs_from_config(&config),
+            build_tabs(&config, &[], &no_creds()),
             vec![
                 TabId::vendor(VendorId::Openrouter),
+                TabId::account_for(VendorId::Openrouter, "work"),
+                TabId::account_for(VendorId::Openrouter, "personal"),
+            ]
+        );
+        // A keyless default is a dead node once accounts exist — hidden.
+        config.openrouter.api_key = None;
+        assert_eq!(
+            build_tabs(&config, &[], &no_creds()),
+            vec![
                 TabId::account_for(VendorId::Openrouter, "work"),
                 TabId::account_for(VendorId::Openrouter, "personal"),
             ]
@@ -986,7 +1257,7 @@ mod tests {
         config.zai.enabled = false;
         config.openrouter.show_default_account = false;
         assert_eq!(
-            tabs_from_config(&config),
+            build_tabs(&config, &[], &no_creds()),
             vec![TabId::vendor(VendorId::Openrouter)]
         );
 
@@ -997,9 +1268,10 @@ mod tests {
                 label: "work".into(),
                 api_key_env: Some("OPENROUTER_WORK_API_KEY".into()),
                 api_key: None,
-            });
+            
+            monthly_limit: None,});
         assert_eq!(
-            tabs_from_config(&config),
+            build_tabs(&config, &[], &no_creds()),
             vec![TabId::account_for(VendorId::Openrouter, "work")]
         );
     }
@@ -1035,7 +1307,7 @@ mod tests {
     fn desktop_labels_become_account_tabs_after_cli_accounts() {
         // Pure core: desktop accounts follow CLI accounts, in the order given.
         let config = config_with_accounts(&["work"]);
-        let tabs = build_tabs(&config, &["gmail".into(), "hotmail".into()]);
+        let tabs = build_tabs(&config, &["gmail".into(), "hotmail".into()], &no_creds());
         assert_eq!(
             tabs,
             vec![
@@ -1054,7 +1326,7 @@ mod tests {
         // other and can silently show a wrong account's usage). The CLI entry is
         // dropped; a CLI-only label (work) is untouched.
         let config = config_with_accounts(&["gmail", "work"]);
-        let tabs = build_tabs(&config, &["gmail".into(), "hotmail".into()]);
+        let tabs = build_tabs(&config, &["gmail".into(), "hotmail".into()], &no_creds());
         assert_eq!(
             tabs,
             vec![
@@ -1077,12 +1349,12 @@ mod tests {
         // No accounts of either kind: the default tab survives (never leave
         // Anthropic tab-less).
         assert_eq!(
-            build_tabs(&config, &[]),
+            build_tabs(&config, &[], &no_creds()),
             vec![TabId::vendor(VendorId::Anthropic)]
         );
         // A Desktop account is present: default suppressed, only the account.
         assert_eq!(
-            build_tabs(&config, &["gmail".into()]),
+            build_tabs(&config, &["gmail".into()], &no_creds()),
             vec![TabId::desktop_account("gmail")]
         );
     }

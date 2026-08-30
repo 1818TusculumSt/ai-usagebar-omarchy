@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
 // Quattro bar entry point. The popup is loaded separately so the object in
 // the bar slot owns shell routing while Panel.qml remains focused on report
@@ -133,13 +134,15 @@ BarWidget {
     anchors.bottomMargin: 3
   }
 
-  // One Text per tile part — the account tag plus EACH window figure (5h,
-  // weekly) — so every figure takes its own color from its own remaining
-  // band; no shared rich-text label whose spans can be dropped wholesale.
-  // Spacing rides leftPadding per ROLE (sep > tag > figure) so a tile reads
-  // as one group and tile boundaries stay wider than intra-tile gaps.
-  // Text items don't take the pointer, so hover, click and wheel keep
-  // reaching the WidgetButton underneath.
+  // One part per tile — the vendor LOGO (plus a named account's suffix),
+  // or a Text fallback when no asset ships / the report predates the field.
+  // Each window figure keeps its own Text with its own remaining-band
+  // color; no shared rich-text label whose spans can be dropped wholesale.
+  // Tile boundaries (the │ separators) carry almost no padding — the
+  // divider glyph has whitespace of its own — while intra-tile gaps
+  // (sep > tag > figure) keep tiles reading as groups.
+  // Items don't take the pointer, so hover, click and wheel keep reaching
+  // the WidgetButton underneath.
   Row {
     id: labelRow
     anchors.centerIn: button
@@ -149,20 +152,63 @@ BarWidget {
     Repeater {
       model: root.panelItem ? root.panelItem.barLabelModels() : []
 
-      Text {
+      Item {
+        id: tilePart
         required property var modelData
-        text: modelData.text
-        color: modelData.color
-        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-        font.pixelSize: Style.font.bodySmall
-        // Critical figures go bold — the alert survives color blindness.
-        font.bold: modelData.bold === true
-        renderType: Text.NativeRendering
+        readonly property string logo: modelData.logo !== undefined ? String(modelData.logo) : ""
+        readonly property string logoLabel: modelData.logoLabel !== undefined
+          ? String(modelData.logoLabel) : ""
+        // Only the tag part can be a logo; figures and separators are text.
+        readonly property bool showLogo: role === "tag"
+          && Model.logoAssetName(logo) !== ""
+        readonly property string role: String(modelData.role || "")
+        readonly property string textWhenNoLogo: String(modelData.text || "")
+        readonly property int leftPad: role === "sep" ? 2
+          : role === "tag" ? 6
+          : role === "figure" ? 4 : 0
+        readonly property int rightPad: role === "sep" ? 2 : 0
+        // The text beside a logo is the account suffix (named accounts
+        // only); without a logo the full tag text stands in.
+        readonly property string text: showLogo ? logoLabel : textWhenNoLogo
+        implicitWidth: leftPad + rightPad
+          + (showLogo ? logoImage.width + (logoLabel !== "" ? 3 : 0) : 0)
+          + (text !== "" ? partText.implicitWidth : 0)
+        implicitHeight: Math.max(logoImage.height, partText.implicitHeight)
         anchors.verticalCenter: parent.verticalCenter
-        leftPadding: modelData.role === "sep" ? 7
-          : modelData.role === "tag" ? 6
-          : modelData.role === "figure" ? 4 : 0
-        rightPadding: modelData.role === "sep" ? 7 : 0
+
+        Image {
+          id: logoImage
+          visible: tilePart.showLogo
+          source: tilePart.showLogo
+            ? Qt.resolvedUrl("logos/" + Model.logoAssetName(tilePart.logo)) : ""
+          // Sized against the bar's body text so the mark reads as part of
+          // the label, not an icon bolted on.
+          height: Style.font.bodySmall
+          width: height
+          sourceSize.width: height
+          sourceSize.height: height
+          fillMode: Image.PreserveAspectFit
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.left: parent.left
+          asynchronous: true
+        }
+
+        Text {
+          id: partText
+          visible: tilePart.text !== ""
+          text: tilePart.text
+          color: modelData.color
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          // Critical figures go bold — the alert survives color blindness.
+          font.bold: modelData.bold === true
+          renderType: Text.NativeRendering
+          anchors.verticalCenter: parent.verticalCenter
+          // Right of the logo when both render (named accounts); at the
+          // item origin otherwise (no logo, or logo-only default accounts).
+          x: tilePart.showLogo && tilePart.logoLabel !== ""
+            ? logoImage.width + 3 : 0
+        }
       }
     }
   }

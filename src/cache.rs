@@ -22,6 +22,14 @@ use crate::error::{AUTH_FAILURE_MESSAGE, AppError, Result};
 /// Default TTL — claudebar's `CACHE_TTL=60`.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(60);
 
+/// The Anthropic and OpenAI Codex OAuth usage endpoints are undocumented
+/// and rate-limit aggressively below ~300s. Frontends may poll as fast as
+/// [`DEFAULT_TTL`] (the Omarchy panel defaults to 60s); these two vendors
+/// simply refresh their cache at this gentler pace, so a fast poll never
+/// turns into a fast API call against them — their data just lags up to
+/// five minutes behind everyone else's minute.
+pub const GENTLE_TTL: Duration = Duration::from_secs(300);
+
 /// Maximum staleness before we refuse to serve cached data even on failure.
 /// Mirrors claudebar's `WEEKLY_WINDOW` (7 days).
 pub const MAX_STALE: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -397,9 +405,22 @@ mod tests {
         assert!(cache.maybe_payload().unwrap().is_none());
     }
 
+    /// The TTL policy is load-bearing: frontends poll at DEFAULT_TTL pace
+    /// (the Omarchy panel defaults to 60s), so these two constants ARE the
+    /// API-call rate. GENTLE_TTL exists precisely because the Anthropic and
+    /// Codex OAuth endpoints rate-limit aggressively below ~300s.
     #[test]
-    fn fresh_payload_respects_ttl() {
-        let (_td, cache) = fixture();
+    fn ttl_policy_paces_the_rate_limited_endpoints() {
+        assert_eq!(DEFAULT_TTL, Duration::from_secs(60));
+        assert_eq!(GENTLE_TTL, Duration::from_secs(5 * 60));
+        assert!(
+            GENTLE_TTL > DEFAULT_TTL,
+            "the gentle pace must be the slower one"
+        );
+    }
+
+    #[test]
+    fn fresh_payload_respects_ttl() {        let (_td, cache) = fixture();
         cache.write_payload(b"x").unwrap();
         // Fresh = within a generous TTL.
         assert!(

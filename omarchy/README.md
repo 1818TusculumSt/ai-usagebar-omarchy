@@ -140,7 +140,10 @@ omarchy bar set ai-usagebar-omarchy provider anthropic@work
 omarchy bar set ai-usagebar-omarchy provider ''
 
 # Numeric values need --json so shell.json stores a number.
-omarchy bar set ai-usagebar-omarchy refreshIntervalSec 300 --json
+# Default is 60 (one poll per cache TTL); raise it if you prefer quieter
+# polling — Claude/Codex data refreshes at their own gentle 300s pace
+# regardless.
+omarchy bar set ai-usagebar-omarchy refreshIntervalSec 60 --json
 
 # Booleans also need --json. The default is true for drop-in compatibility.
 omarchy bar set ai-usagebar-omarchy showValue false --json

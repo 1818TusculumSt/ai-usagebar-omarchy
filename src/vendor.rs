@@ -33,6 +33,7 @@ pub(crate) const VENDOR_SECRET_ENV_VARS: &[&str] = &[
     "MOONSHOT_API_KEY",
     "XAI_MANAGEMENT_KEY",
     "ANTHROPIC_ADMIN_KEY",
+    "OPENAI_ADMIN_KEY",
     "XAI_API_KEY",
     "GROK_API_KEY",
     "OPENCODE_GO_API_KEY",
@@ -111,6 +112,8 @@ pub enum VendorId {
     #[serde(rename = "anthropic_api")]
     AnthropicApi,
     Openai,
+    #[serde(rename = "openai_api")]
+    OpenaiApi,
     Zai,
     Openrouter,
     Deepseek,
@@ -134,6 +137,7 @@ impl VendorId {
             VendorId::Anthropic => "anthropic",
             VendorId::AnthropicApi => "anthropic_api",
             VendorId::Openai => "openai",
+            VendorId::OpenaiApi => "openai_api",
             VendorId::Zai => "zai",
             VendorId::Openrouter => "openrouter",
             VendorId::Deepseek => "deepseek",
@@ -159,6 +163,7 @@ impl VendorId {
             VendorId::Anthropic => "Claude",
             VendorId::AnthropicApi => "Anthropic API",
             VendorId::Openai => "Codex",
+            VendorId::OpenaiApi => "OpenAI API",
             VendorId::Zai => "Z.AI",
             VendorId::Openrouter => "OpenRouter",
             VendorId::Deepseek => "DeepSeek",
@@ -185,6 +190,7 @@ impl VendorId {
             VendorId::Anthropic => "cld",
             VendorId::AnthropicApi => "aac",
             VendorId::Openai => "gpt",
+            VendorId::OpenaiApi => "oai",
             VendorId::Zai => "zai",
             VendorId::Openrouter => "opr",
             VendorId::Deepseek => "dsk",
@@ -202,11 +208,39 @@ impl VendorId {
         }
     }
 
+    /// Asset id for the vendor's logo — the shared key every graphical
+    /// frontend resolves against its bundled icons (`assets/logos/<slug>.svg`).
+    /// Same brand intentionally shares one asset: Grok and SuperGrok are both
+    /// xAI's mark, Anthropic's API product is the Anthropic glyph. Frontends
+    /// fall back to the text tag when the asset is absent; this table stays
+    /// the single mapping so the bar and the tabs can never disagree.
+    pub const fn logo_slug(self) -> &'static str {
+        match self {
+            VendorId::Anthropic => "claude",
+            VendorId::AnthropicApi => "anthropic",
+            VendorId::Openai | VendorId::OpenaiApi => "openai",
+            VendorId::Zai => "zai",
+            VendorId::Openrouter => "openrouter",
+            VendorId::Deepseek => "deepseek",
+            VendorId::Kimi => "kimi",
+            VendorId::Kilo => "kilo",
+            VendorId::Novita => "novita",
+            VendorId::Moonshot => "moonshot",
+            VendorId::Grok | VendorId::Supergrok => "grok",
+            VendorId::Antigravity => "antigravity",
+            VendorId::Cursor => "cursor",
+            VendorId::Minimax => "minimax",
+            VendorId::Kiro => "kiro",
+            VendorId::OpenCodeGo => "opencode",
+        }
+    }
+
     pub fn all() -> &'static [VendorId] {
         &[
             VendorId::Anthropic,
             VendorId::AnthropicApi,
             VendorId::Openai,
+            VendorId::OpenaiApi,
             VendorId::Zai,
             VendorId::Openrouter,
             VendorId::Deepseek,
@@ -470,5 +504,41 @@ mod tests {
                 serde_json::to_value(id).unwrap().as_str().unwrap()
             );
         }
+    }
+
+    /// Every logo id resolves to exactly one bundled asset, and same-brand
+    /// vendors share one deliberately: Grok/SuperGrok are one asset, so the
+    /// distinct set is one smaller than the vendor list — but two different
+    /// brands must never collide on one icon.
+    #[test]
+    fn every_vendor_logo_slug_is_unique_per_brand() {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut vendors = 0;
+        for vendor in VendorId::all() {
+            vendors += 1;
+            let logo = vendor.logo_slug();
+            assert!(
+                !logo.is_empty(),
+                "{} has no logo asset id",
+                vendor.slug()
+            );
+            assert!(
+                logo.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                "{logo} is not a slug"
+            );
+            seen.insert(logo);
+        }
+        assert_eq!(
+            seen.len(),
+            vendors - 2,
+            "exactly the same-brand pairs (Grok/SuperGrok, OpenAI/OpenAI API)              share an asset"
+        );
+        assert_eq!(VendorId::Grok.logo_slug(), VendorId::Supergrok.logo_slug());
+        assert_eq!(
+            VendorId::Openai.logo_slug(),
+            VendorId::OpenaiApi.logo_slug()
+        );
+        assert_eq!(VendorId::Anthropic.logo_slug(), "claude");
+        assert_eq!(VendorId::Antigravity.logo_slug(), "antigravity");
     }
 }

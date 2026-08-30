@@ -7,7 +7,98 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release is also published at
 <https://github.com/KyleLee/ai-usagebar-omarchy/releases>.
 
-## [Unreleased]
+## [1.9.0] — 2026-08-30
+
+### Added
+
+- **Vendor logos in the bar tiles** (Omarchy Quattro panel and the KDE
+  plasmoid). Each tile leads with the provider's own mark — official
+  brand SVGs from Simple Icons where the brand is covered (CC0 vector
+  mirrors of the official logos), official website favicons for the rest
+  (Z.AI, Grok/xAI, Kilo, Novita, Moonshot, MiniMax, Kiro) — bundled per
+  frontend (`omarchy/logos/`, `kde-plasmoid/package/contents/logos/`).
+  Named accounts keep their distinguishing suffix beside the logo; a
+  default account is the logo alone; the text tag remains the fallback
+  when an asset is absent. `usage --json` entries carry `logo`, the asset
+  id Rust's new `VendorId::logo_slug` owns — frontends never keep their
+  own vendor→icon table.
+
+- **Exhausted accounts leave the bar** (`exhausted` in `usage --json`).
+  An account whose worst window is at 100% (or whose balance is at/below
+  zero) drops its bar tile — Waybar `--vendor all` and the Omarchy bar —
+  until the next report shows room again; recovery is stateless because
+  the flag is recomputed per report. Tabs, popups and tooltips keep the
+  account; the old GNOME-extension rule (any maxed window gates usage
+  even while the other still has room) decides.
+
+- **Compact one-unit countdowns in the bars** — `42m`, `5.3h`, `2.3d`
+  (Rust `countdown::format_compact`, mirrored in `omarchy/Model.js`).
+  Tooltips, panels and popups keep the detailed two-component form
+  (`2h 05m`, `4d 2h`), matching the "short bar, verbose hover" split of
+  every other figure.
+
+- **The tiling toggle is back**: **Tile every account in the top bar**
+  (`barTiled`, default on). Tiled, the bar drops the module robot — every
+  tile leads with its vendor logo, so the icon was pure redundancy. Off,
+  the opposite minimalism: the robot icon alone, a status indicator whose
+  figures live in the tooltip and the click popup. The wheel cycle and the
+  tabs stay the selector either way.
+- **The robot glyph never changes.** An account at zero remaining used to
+  swap the bar icon to an alert mark — the bar now keeps the robot in
+  every state and carries alarms through the urgent color alone (plus the
+  per-figure styling on the tiles). Tile dividers lost their padding
+  spaces too: `claude 42% 5.3h│kimi 18% 1d`, in the panel and the Waybar
+  `--vendor all` line alike.
+
+- **A provider's only key drops its number.** With positional naming, a
+  lone `[[zai.accounts]]`/`[[kimi.accounts]]` entry used to tag its tile
+  "1" beside the logo — a suffix that distinguishes it from nothing. A
+  solo account now renders exactly like a default one: the logo alone
+  (provider name as the text fallback). The moment a second key exists —
+  including one merely exhausted and hidden from the bar — both tiles
+  carry their numbers again.
+
+- **The panel polls every 60 seconds** (was 300), matching the cache TTL:
+  every poll is a real refresh for the fast vendors and a cache read for
+  the rest. The Anthropic and OpenAI Codex OAuth endpoints — which
+  rate-limit aggressively below ~300s — get a dedicated 300s cache TTL
+  (`GENTLE_TTL`), so the faster poll never becomes a faster API call
+  against them; their data simply lags up to five minutes. Waybar's
+  recommended 300s interval is unchanged.
+
+- **Fresh install opens straight into Settings**: when the first report
+  shows every entry unconfigured (no key, no login), the panel opens the
+  settings form once — adding a key is the only thing left to do. A
+  deliberate close stays closed.
+
+- **Multi-account for EVERY key-based vendor.** Z.AI and Kimi's account
+  cards generalize to OpenRouter, DeepSeek, Kilo, Novita, Moonshot, Grok,
+  MiniMax, OpenCode Go, Anthropic API and OpenAI API: `[[vendor.accounts]]`
+  with just a key (plus a per-account `monthly_limit` on the two
+  Admin-spend vendors), positional naming, isolated caches, `--account N`
+  selection, and grouped cards with a per-vendor **Add … Account** button
+  in the settings panel. OpenRouter's legacy hand-written labels are
+  ignored — the positional rule owns it now. The plain "API KEYS" section
+  is gone; every key is an account card. Local-session vendors
+  (Antigravity, Cursor, Kiro, SuperGrok) stay single-account by nature.
+
+- **New vendor: OpenAI API** (`[openai_api]`) — trailing-30-day billed
+  dollars from the platform Costs API (`/v1/organization/costs`, grouped
+  by line item, paginated), over an organization **Admin key**
+  (`OPENAI_ADMIN_KEY`; regular project `sk-` keys are rejected). Spend,
+  not balance — there is no balance endpoint — against an optional
+  per-account monthly limit. The Codex OAuth vendor is untouched.
+
+- **Accounts are auto-named by position — the `label` field is gone from
+  the config file.** Each `[[zai.accounts]]` / `[[kimi.accounts]]` entry is
+  named "1", "2", … by its position in the list (the settings panel's
+  top-to-bottom order); that name is the `--account 2` selector, the
+  report/tab id, and the cache subdirectory. The settings form asks for no
+  name (add = key only), writes no label, and cleans legacy `label` keys
+  out of the array the next time it touches the vendor. A hand-written
+  legacy label still parses but is ignored — delete it at leisure.
+  Anthropic and OpenRouter accounts keep their labels (theirs come from
+  external login directories and carry meaning a position cannot).
 
 ### Removed
 
@@ -48,9 +139,10 @@ Each release is also published at
 
 - Named accounts tag their tile with the name ONLY (`kimi-main 42%·2h`); unnamed
   defaults show the provider name (`kimi 37%·2d`). The `showProvider`
-  toggle is gone (superseded), and so are `barTiled` / `showValue` — tiling
-  every account and showing the value are the only behavior now. The one
-  remaining display toggle is **Show remaining instead of used**.
+  toggle is gone (superseded), and so is `showValue` — a tile without its
+  figures is just a tag. Tiling every account stays the default, and the
+  **Tile every account in the top bar** toggle is what turns it off. The one
+  other display toggle is **Show remaining instead of used**.
 
 - Z.AI site selection is gone from the settings form: the site
   (z.ai / bigmodel.cn) is auto-detected from the billing type (team & usage
@@ -62,10 +154,9 @@ Each release is also published at
   are restored on reopen; `Esc`/back discards pending secrets.
 
 - The native settings form manages Z.AI **and Kimi** accounts as cards:
-  add (provider picker + pre-filled name `Z.AI`/`Kimi`, auto-incremented),
-  rename, reset key, delete, per-card Apply. Naming a default account moves
-  its inline key into a named account. Kimi cards take just a name and a
-  key — region stays auto-detected.
+  add (provider picker, the account auto-named on save), reset key,
+  delete, per-card Apply. Kimi cards take just a key — region stays
+  auto-detected.
 
 - Panel tabs list only accounts that actually read; not-configured entries
   become a calm hint state (no red, no bar alert) instead of an error.
@@ -1959,7 +2050,8 @@ vendors. Highlights:
 - Live API smoke test suite (`make smoke`) that exercises the real
   undocumented endpoints to detect schema drift before users do.
 
-[Unreleased]: https://github.com/akitaonrails/ai-usagebar/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/KyleLee/ai-usagebar-omarchy/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/KyleLee/ai-usagebar-omarchy/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/akitaonrails/ai-usagebar/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/akitaonrails/ai-usagebar/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/akitaonrails/ai-usagebar/compare/v1.5.2...v1.6.0

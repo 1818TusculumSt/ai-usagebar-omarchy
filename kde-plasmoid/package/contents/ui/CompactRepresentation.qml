@@ -88,6 +88,22 @@ MouseArea {
         columnSpacing: Kirigami.Units.smallSpacing * 2
         rowSpacing: Kirigami.Units.smallSpacing
 
+        // The vendor's own mark leads the cells; absent asset (or an older
+        // binary without the logo field) simply renders nothing extra.
+        Image {
+            visible: source.toString() !== ""
+            source: {
+                const name = Logic.logoAssetName(root.applet.entry ? root.applet.entry.logo : "");
+                return name !== "" ? Qt.resolvedUrl("../logos/" + name) : "";
+            }
+            height: Kirigami.Units.iconSizes.smallMedium
+            width: height
+            sourceSize.width: height
+            sourceSize.height: height
+            fillMode: Image.PreserveAspectFit
+            Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
+        }
+
         // Error / message state: show the binary's own words rather than
         // inventing our own, and never render a blank panel item.
         // "⚠ ai" and "5h …" are the exact strings the GNOME and macOS panels

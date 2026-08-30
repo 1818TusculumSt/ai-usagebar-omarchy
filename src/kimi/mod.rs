@@ -19,6 +19,22 @@ pub use fetch::fetch_snapshot;
 use crate::config::KimiConfig;
 use crate::error::{AppError, Result};
 
+/// Whether the Kimi Code CLI's own OAuth login exists for this config —
+/// the credential the DEFAULT `[kimi]` tab can ride when no API key is
+/// set. Shared by the tab builder and the settings snapshot so the two can
+/// never disagree about whether a default is real.
+pub fn cli_login_present(config: &KimiConfig) -> bool {
+    crate::kimi::oauth::default_home()
+        .map(|home| {
+            let path = match &config.credentials_path {
+                Some(p) => p.clone(),
+                None => crate::kimi::oauth::credentials_path_in(&home),
+            };
+            crate::kimi::oauth::is_logged_in(&path)
+        })
+        .unwrap_or(false)
+}
+
 /// Pick the credential and the deployment for a configured Kimi vendor.
 ///
 /// An API key wins when one is set: it is the explicit choice, it needs no

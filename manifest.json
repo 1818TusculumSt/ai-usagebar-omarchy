@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ai-usagebar-omarchy",
   "name": "AI Usage",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "author": "KyleLee",
   "license": "MIT",
   "description": "Multi-provider AI plan usage and balances in a native Omarchy Quattro panel.",
@@ -26,8 +26,9 @@
     "defaultSection": "right",
     "defaults": {
       "provider": "",
-      "refreshIntervalSec": 300,
-      "showRemaining": true
+      "refreshIntervalSec": 60,
+      "showRemaining": true,
+      "barTiled": true
     },
     "schema": [
       {
@@ -44,13 +45,20 @@
         "min": 30,
         "max": 3600,
         "step": 30,
-        "defaultValue": 300
+        "defaultValue": 60
       },
       {
         "key": "showRemaining",
         "type": "boolean",
         "label": "Show remaining",
         "description": "Show what is left of each window in the bar tiles (kmi 62%) instead of the used percentage (kmi 38%). On by default.",
+        "defaultValue": true
+      },
+      {
+        "key": "barTiled",
+        "type": "boolean",
+        "label": "Tile all accounts",
+        "description": "Show every working account side by side, each led by its provider logo (on), or collapse the bar to the robot icon alone (off). On by default.",
         "defaultValue": true
       }
     ]

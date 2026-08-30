@@ -90,16 +90,30 @@ enabled = false
 # "$1.34/mo".
 # monthly_limit = 1000
 
+[openai_api]
+enabled = false
+# Platform API spend (trailing 30 days) via the Costs API. Requires an
+# organization ADMIN key — platform.openai.com → Settings → Organization;
+# regular project sk- keys are rejected by these endpoints. Separate from
+# the Codex OAuth login above: this watches what you SPEND on the platform.
+# api_key = "paste-your-admin-key-here"
+# Positive, finite monthly USD limit for the spend-vs-limit % display. With
+# it: "$1.34 / $1000 · 0%". Without it: "$1.34/30d". No balance endpoint
+# exists — spend against your own ceiling is the whole display.
+# monthly_limit = 1000
+# Extra keys, each its own tab/tile with an isolated cache and its own
+# optional monthly_limit (auto-named 1, 2, … by position).
+# [[openai_api.accounts]]
+# api_key = "paste-another-admin-key"
+
 [openai]
 enabled = true
 # Path to the Codex CLI OAuth credentials. Leave commented out to use
 # the default ~/.codex/auth.json.
 # codex_auth_path = "/home/you/.codex/auth.json"
-# RESERVED — setting this does nothing today. It names the env var a future
-# API-key-only path would read (admin key → `/v1/organization/costs`). No code
-# consumes it: OpenAI usage comes only from Codex OAuth. Left commented out so
-# it isn't mistaken for a working alternative to `codex login`.
-# admin_key_env = "OPENAI_ADMIN_KEY"
+# admin_key_env is inert here: platform-API spend monitoring lives in its
+# own [openai_api] section below (Admin key → the Costs API); this section
+# stays the Codex OAuth login.
 # Extra Codex logins, each its own auth.json — the same shape as
 # [[anthropic.accounts]], because Codex is an OAuth vendor too. Create a second
 # login with `CODEX_HOME=~/.codex-work codex login` and point at what it wrote.
@@ -131,40 +145,38 @@ enabled = true
 # team & usage keys live on bigmodel.cn, personal keys on z.ai. Only set
 # `site` by hand for rare edge cases.
 # site = "cn"
-# Extra keys, each its own entry everywhere — its label is the bar-tile
-# tag (kimi-main 42%·2h 15%·2d) and the `--account <label>` selector — with an
-# isolated cache. Same fields as the section above. Kimi accounts take the
-# same shape ([[kimi.accounts]] with label + key); the name is the only
-# field Kimi needs — region is auto-detected.
+# Extra keys, each its own entry everywhere. Accounts are AUTO-NAMED by their
+# position in this list ("1", "2", … — the order the settings panel shows):
+# no label field, and `--account 2` selects the second one. EVERY key vendor
+# (openrouter, deepseek, kilo, novita, moonshot, grok, minimax,
+# opencode-go, anthropic_api, openai_api, kimi) takes the same shape.
 # [[zai.accounts]]
-# label = "team"
 # account_type = "team"
 # organization_id = "org-…"
 # project_id = "proj-…"
 # [[zai.accounts]]
-# label = "cn-personal"
 # api_key = "paste-your-key-here"   # ← uncomment & paste your key
 # site = "cn"
 # [[zai.accounts]]
-# label = "payg"
 # account_type = "usage"
 # Set false to hide the default [zai] key above once every account is named.
 # show_default_account = false
 
 [openrouter]
 enabled = true
-# Named keys appear as separate TUI/report entries and use isolated caches.
-# The default key above stays visible unless this is false. It is always kept
-# when no named accounts exist.
+# Extra keys, each its own tab/tile with an isolated cache, auto-named by
+# position ("1", "2", …). The default key above stays visible unless this is
+# false; it is always kept when no named accounts exist.
 # show_default_account = false
 # [[openrouter.accounts]]
-# label = "work"
 # api_key = "paste-your-key-here"   # ← uncomment & paste your key
 
 [deepseek]
 # Disabled by default — enable once you've set a key (env var or inline).
 # Saving a key in the Settings overlay writes the inline fallback AND flips
 # `enabled` to true; clearing the field removes the inline key again.
+# Extra keys: [[deepseek.accounts]] with just api_key, auto-named 1, 2, … —
+# the same multi-account shape every key vendor takes.
 enabled = false
 # api_key = "paste-your-key-here"
 
@@ -187,9 +199,9 @@ enabled = false
 # Extra Kimi For Coding subscriptions, each its own entry everywhere with an
 # isolated cache. Accounts are API-key based (issue one per subscription at
 # kimi.com/code/console) — the CLI OAuth login is a single account and cannot
-# back a named entry.
+# back a named entry. Auto-named by position ("1", "2", …), like Z.AI.
 # [[kimi.accounts]]
-# label = "work"
+# api_key = "paste-your-key-here"   # ← uncomment & paste your key
 # Set false to hide the default login/key above once every account is named.
 # show_default_account = false
 

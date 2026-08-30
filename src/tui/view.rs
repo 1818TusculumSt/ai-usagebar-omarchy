@@ -100,7 +100,7 @@ fn compact_tab_label(tab: &TabId) -> String {
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let theme = bubble_theme(&app.theme);
-    let block = theme.titled_block(" ai-usagebar ");
+    let block = theme.titled_block(" ai-usagebar-omarchy ");
     let inner = block.inner(area);
     f.render_widget(block, area);
 

@@ -27,6 +27,7 @@ use crate::tui::panels::{Section, sections_with_metadata_for};
 const PACE_TOLERANCE: u32 = 5;
 
 /// One configured vendor or account.
+#[derive(Debug, Clone)]
 struct Entry {
     id: String,
     name: String,
@@ -34,6 +35,10 @@ struct Entry {
     /// The vendor's `{vendor_short}` code. Frontends that want a Waybar-style
     /// provider tag take it from here rather than keeping their own table.
     short_name: String,
+    /// The vendor's logo asset id (`VendorId::logo_slug`) — the key a
+    /// frontend resolves against its bundled icons. Frontends fall back to
+    /// the text tag when they ship no asset for it.
+    logo: String,
     plan: Option<String>,
     sections: Vec<ReportSection>,
     error: Option<String>,
@@ -41,6 +46,11 @@ struct Entry {
     /// key, no login) rather than a broken configuration. Frontends use it
     /// to keep the display calm: a hint, not an alarm.
     unconfigured: bool,
+    /// `true` when every reported window is maxed or the balance is spent —
+    /// the account has no capacity left RIGHT NOW. Status bars hide
+    /// exhausted tiles (the tab and the popup keep them); recovery is
+    /// automatic because the flag is recomputed from every fresh report.
+    exhausted: bool,
     stale: bool,
     fetched_at: Option<DateTime<Utc>>,
 }
@@ -66,10 +76,55 @@ pub(crate) fn is_unconfigured_error(message: &str) -> bool {
     MARKERS.iter().any(|marker| message.contains(marker))
 }
 
+/// A row that carries remaining prepaid capacity: its value going to (or
+/// below) zero means the account has nothing left to spend. "Spend" rows are
+/// deliberately absent — a spend of $0 is an untouched account, not a spent
+/// one.
+fn is_balance_row(label: &str) -> bool {
+    let label = label.to_lowercase();
+    ["balance", "available", "prepaid"]
+        .iter()
+        .any(|word| label.contains(word))
+}
+
+/// Parse a rendered money value (`-$5.71`, `¥20.00`, `3.50 EUR`) back into a
+/// number. `None` for anything that does not reduce to a plain decimal —
+/// the caller only ever feeds it balance strings this project formatted.
+fn balance_amount(value: &str) -> Option<f64> {
+    let cleaned: String = value
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+        .collect();
+    if cleaned.is_empty() || cleaned == "-" || cleaned == "." {
+        return None;
+    }
+    cleaned.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// Bar-tile exhaustion, the rule every frontend shares (the report ships it
+/// as `exhausted`; the aggregate bar computes it directly): a tile leaves
+/// the status bar once ANY reported percentage metric is at 100 — a maxed
+/// window gates usage even when the others still have room — or a balance
+/// row is at or below zero. Tabs and popups never filter on it.
+pub(crate) fn rows_exhausted<'a>(rows: impl IntoIterator<Item = (&'a str, Option<u16>, &'a str)>) -> bool {
+    for (label, percent, value) in rows {
+        if percent.is_some_and(|pct| pct >= 100) {
+            return true;
+        }
+        if is_balance_row(label)
+            && let Some(amount) = balance_amount(value)
+            && amount <= 0.0
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Lossless machine-readable projection of a TUI panel row. `metrics` remains
 /// available in JSON as a convenience view over only the gauge rows; callers
 /// that need every reported value should consume this ordered list.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ReportSection {
     Metric {
@@ -137,6 +192,7 @@ pub async fn run(json: bool) -> i32 {
     for tab in &tabs {
         entries.push(entry_for(&client, &config, tab).await);
     }
+    apply_solo_display_names(&mut entries);
 
     if json {
         println!(
@@ -147,6 +203,35 @@ pub async fn run(json: bool) -> i32 {
         print!("{}", render_text(&entries));
     }
     report_exit_code(&entries)
+}
+
+/// A vendor with a single entry ships that entry's `display_name` WITHOUT the
+/// account suffix — "Kimi", not "Kimi · 1". The suffix exists to distinguish
+/// siblings; a lone account has none, so every surface reading display_name
+/// (the panel's tabs, hero, tooltips, the KDE plasmoid) shows the plain
+/// provider name. Counted over the WHOLE report — an erroring or exhausted
+/// sibling still exists, and when it reads again both names get their
+/// suffixes back. The machine `name` keeps the suffix for stable addressing.
+fn apply_solo_display_names(entries: &mut [Entry]) {
+    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    for entry in entries.iter() {
+        let base = entry.id.split('@').next().unwrap_or("").to_string();
+        *counts.entry(base).or_default() += 1;
+    }
+    for entry in entries.iter_mut() {
+        if !entry.id.contains('@') {
+            continue; // the vendor's default entry never carries a suffix
+        }
+        let base = entry.id.split('@').next().unwrap_or("");
+        if counts.get(base).copied() != Some(1) {
+            continue;
+        }
+        // Drop the first " · <label>" segment (a desktop marker riding in
+        // the label goes with it — a solo account is just the provider).
+        if let Some((plain, _)) = entry.display_name.split_once(" · ") {
+            entry.display_name = plain.to_string();
+        }
+    }
 }
 
 async fn entry_for(client: &reqwest::Client, config: &Config, tab: &TabId) -> Entry {
@@ -160,6 +245,7 @@ fn entry_from_state(tab: &TabId, state: &TabState, now: chrono::DateTime<Utc>) -
         name: tab_name(tab),
         display_name: tab_display_name(tab),
         short_name: tab.vendor.short_name().to_string(),
+        logo: tab.vendor.logo_slug().to_string(),
         plan: None,
         sections: Vec::new(),
         error: match &state {
@@ -170,6 +256,7 @@ fn entry_from_state(tab: &TabId, state: &TabState, now: chrono::DateTime<Utc>) -
             TabState::Error(message) => is_unconfigured_error(message),
             _ => false,
         },
+        exhausted: false,
         stale: matches!(state, TabState::Ready(ready) if ready.stale),
         fetched_at: match state {
             TabState::Ready(ready) => ready.fetched_at,
@@ -193,9 +280,9 @@ fn entry_from_state(tab: &TabId, state: &TabState, now: chrono::DateTime<Utc>) -
                 ..
             } => {
                 entry.sections.push(ReportSection::Metric {
-                    label,
+                    label: label.clone(),
                     percent: pct,
-                    value: value_label,
+                    value: value_label.clone(),
                     detail: footnote,
                     severity: severity.as_str().into(),
                     reset_at: projected.reset_at,
@@ -203,12 +290,33 @@ fn entry_from_state(tab: &TabId, state: &TabState, now: chrono::DateTime<Utc>) -
                 });
             }
             Section::Text { label, value } => {
-                entry.sections.push(ReportSection::Text { label, value });
+                entry.sections.push(ReportSection::Text {
+                    label: label.clone(),
+                    value: value.clone(),
+                });
             }
             Section::Block { label, body } => {
                 entry.sections.push(ReportSection::Block { label, body });
             }
             Section::Spacer => entry.sections.push(ReportSection::Spacer),
+        }
+        // Exhaustion rides the same single pass: every projected metric and
+        // balance row contributes, so the flag can never disagree with the
+        // sections a frontend renders from.
+        let projected_row = match entry.sections.last() {
+            Some(ReportSection::Metric {
+                label, percent, value, ..
+            }) => Some((label.as_str(), Some(*percent), value.as_str())),
+            Some(ReportSection::Text { label, value }) => {
+                Some((label.as_str(), None, value.as_str()))
+            }
+            _ => None,
+        };
+        if !entry.exhausted
+            && let Some(row) = projected_row
+            && rows_exhausted(std::iter::once(row))
+        {
+            entry.exhausted = true;
         }
     }
     entry
@@ -279,10 +387,12 @@ fn render_json_for_primary(entries: &[Entry], primary: Option<&str>) -> String {
                 "name": entry.name,
                 "display_name": entry.display_name,
                 "short_name": entry.short_name,
+                "logo": entry.logo,
                 "plan": entry.plan,
                 "status": if entry.error.is_some() { "error" } else { "ready" },
                 "error": entry.error,
                 "unconfigured": entry.unconfigured,
+                "exhausted": entry.exhausted,
                 "stale": entry.stale,
                 "fetched_at": entry.fetched_at,
                 "metrics": metrics,
@@ -431,10 +541,12 @@ mod tests {
             name: name.into(),
             display_name: name.into(),
             short_name: VendorId::Anthropic.short_name().into(),
+            logo: VendorId::Anthropic.logo_slug().into(),
             plan: Some("Claude Max 20x".into()),
             sections,
             error: None,
             unconfigured: false,
+            exhausted: false,
             stale: false,
             fetched_at: None,
         }
@@ -756,5 +868,137 @@ mod tests {
         let mut failed = entry("openai", Vec::new());
         failed.error = Some("not signed in".into());
         assert_eq!(report_exit_code(&[failed, entry("cursor", Vec::new())]), 0);
+    }
+
+    /// The bar hides a tile once ANY window is maxed, even while the other
+    /// window still has room — a maxed 5h window gates usage just as hard
+    /// as a maxed weekly one.
+    #[test]
+    fn exhausted_when_any_window_hits_100() {
+        use crate::usage::UsageWindow;
+        let state = TabState::Ready(Box::new(ReadyTab {
+            snapshot: VendorSnapshot::Zai(crate::usage::ZaiSnapshot {
+                plan: "GLM Coding Pro".into(),
+                session: Some(UsageWindow {
+                    utilization_pct: 100,
+                    resets_at: Some(Utc::now() + chrono::Duration::hours(1)),
+                    window_duration: chrono::Duration::hours(5),
+                }),
+                weekly: Some(UsageWindow {
+                    utilization_pct: 15,
+                    resets_at: Some(Utc::now() + chrono::Duration::days(2)),
+                    window_duration: chrono::Duration::days(7),
+                }),
+                mcp: None,
+                usage_stats: None,
+            }),
+            stale: false,
+            last_error: None,
+            fetched_at: None,
+        }));
+        let projected = entry_from_state(&TabId::vendor(VendorId::Zai), &state, Utc::now());
+        assert!(projected.exhausted);
+
+        // The same snapshot at 99% is still very much in the bar.
+        let mut recoverable = state;
+        let TabState::Ready(ready) = &mut recoverable else {
+            unreachable!()
+        };
+        if let VendorSnapshot::Zai(snap) = &mut ready.snapshot {
+            snap.session.as_mut().unwrap().utilization_pct = 99;
+        }
+        let recovered = entry_from_state(&TabId::vendor(VendorId::Zai), &recoverable, Utc::now());
+        assert!(!recovered.exhausted);
+    }
+
+    /// Balance vendors: a balance at (or below) zero is spent; a spend row
+    /// of $0 is an untouched account and must NOT read as exhausted.
+    #[test]
+    fn exhausted_when_balance_spent_but_not_when_spend_is_zero() {
+        let spent = TabState::Ready(Box::new(ReadyTab {
+            snapshot: VendorSnapshot::Deepseek(DeepseekSnapshot {
+                is_available: true,
+                balance: 0.0,
+                granted: 5.0,
+                topped_up: 5.0,
+                currency: "USD".into(),
+            }),
+            stale: false,
+            last_error: None,
+            fetched_at: None,
+        }));
+        let projected = entry_from_state(&TabId::vendor(VendorId::Deepseek), &spent, Utc::now());
+        assert!(projected.exhausted);
+
+        assert!(rows_exhausted([
+            ("Balance", None, "-$5.71"), // OpenRouter overrun debt
+        ]));
+        assert!(!rows_exhausted([
+            ("Spend this month", None, "$0.00"),
+            ("Balance", None, "$12.50"),
+        ]));
+        assert!(!rows_exhausted([
+            ("Session (5h)", Some(42), "42%"),
+            ("Weekly (7d)", Some(88), "88%"),
+        ]));
+    }
+
+    /// Every entry — errors included — carries its vendor's logo asset id so
+    /// frontends can brand a tab before the first successful fetch.
+    #[test]
+    fn every_entry_carries_its_vendor_logo_slug() {
+        let failed = TabState::Error("not signed in".into());
+        let anthropic = entry_from_state(&TabId::account("gmail"), &failed, Utc::now());
+        assert_eq!(anthropic.logo, "claude");
+        let cursor = entry_from_state(&TabId::vendor(VendorId::Cursor), &failed, Utc::now());
+        assert_eq!(cursor.logo, "cursor");
+        let supergrok = entry_from_state(&TabId::vendor(VendorId::Supergrok), &failed, Utc::now());
+        assert_eq!(supergrok.logo, "grok", "same brand shares one asset");
+
+        let rendered = render_json_for_primary(&[cursor], None);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["entries"][0]["logo"], "cursor");
+        assert_eq!(value["entries"][0]["exhausted"], false);
+    }
+
+    /// A vendor's only account drops the " · <suffix>" from display_name —
+    /// a lone "Kimi · 1" tab reads as just "Kimi". With a sibling present
+    /// (ready, erroring, or exhausted) both keep their suffixes; the machine
+    /// `name` is never touched.
+    #[test]
+    fn solo_accounts_drop_their_display_suffix() {
+        fn with_id(mut entry: Entry, id: &str, display: &str) -> Entry {
+            entry.id = id.into();
+            entry.display_name = display.into();
+            entry
+        }
+        // kimi has ONLY the numbered account → solo. zai has two numbered
+        // accounts → siblings. deepseek is a bare default entry.
+        let solo = with_id(entry("kimi · 1", Vec::new()), "kimi@1", "Kimi · 1");
+        let twin = with_id(entry("zai · 1", Vec::new()), "zai@1", "Z.AI · 1");
+        let twin2 = with_id(entry("zai · 2", Vec::new()), "zai@2", "Z.AI · 2");
+        let default = with_id(entry("deepseek", Vec::new()), "deepseek", "DeepSeek");
+
+        let mut entries = vec![solo, twin, twin2, default];
+        apply_solo_display_names(&mut entries);
+        assert_eq!(entries[0].display_name, "Kimi", "solo loses its suffix");
+        assert_eq!(entries[0].name, "kimi · 1", "machine name untouched");
+        assert_eq!(entries[1].display_name, "Z.AI · 1", "siblings keep theirs");
+        assert_eq!(entries[2].display_name, "Z.AI · 2");
+        assert_eq!(entries[3].display_name, "DeepSeek", "default entry unchanged");
+
+        // A vendor with default + one numbered account is NOT solo — the
+        // number still distinguishes the account from the default's tile.
+        let mut pair = vec![
+            with_id(entry("kimi", Vec::new()), "kimi", "Kimi"),
+            with_id(entry("kimi · 1", Vec::new()), "kimi@1", "Kimi · 1"),
+        ];
+        apply_solo_display_names(&mut pair);
+        assert_eq!(pair[1].display_name, "Kimi · 1");
+
+        // JSON ships the trimmed name.
+        let rendered = render_json_for_primary(&[entries[0].clone()], None);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["entries"][0]["display_name"], "Kimi");
     }
 }

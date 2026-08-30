@@ -7,6 +7,9 @@
 # Claude Code local scratch state.
 .claude/
 
+# Open Code
+.opencode
+
 # Local secrets — never commit
 .env
 .env.local

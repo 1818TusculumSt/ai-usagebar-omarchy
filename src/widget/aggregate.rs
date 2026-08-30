@@ -44,6 +44,11 @@ pub struct AggregateEntry {
     /// Routine not-configured state — calm styling, never drives the
     /// module's alert class (same classification the report ships).
     pub unconfigured: bool,
+    /// Every reported window maxed / balance spent (the report's
+    /// `exhausted` rule). The BAR omits exhausted tiles — the account has
+    /// no capacity left, and its reset arrives with the next report; the
+    /// popup keeps the row so the state stays visible on hover.
+    pub exhausted: bool,
     pub stale: bool,
     pub fetched_at: Option<DateTime<Utc>>,
     /// Projected rows shared with the TUI/report (metrics carry their own
@@ -160,6 +165,16 @@ impl AggregateEntry {
         } else {
             tile_figures(&sections, best.as_ref())
         };
+        // Same rule the report ships (`report::rows_exhausted`): any maxed
+        // window or spent balance hides the tile from the bar.
+        let exhausted = error.is_none()
+            && crate::report::rows_exhausted(sections.iter().map(|row| {
+                (
+                    row.label.as_str(),
+                    row.percent,
+                    row.value.as_str(),
+                )
+            }));
 
         Self {
             label,
@@ -169,6 +184,7 @@ impl AggregateEntry {
             severity,
             error,
             unconfigured,
+            exhausted,
             stale,
             fetched_at,
             sections,
@@ -314,16 +330,19 @@ fn worst_class(entries: &[AggregateEntry]) -> Class {
         .unwrap_or(Class::Low)
 }
 
-/// `icon label 42% · 2h │ …` — one severity-colored span per *working*
-/// account, joined with a vertical bar like the GNOME panel's groups. Each
-/// tile carries its headline metric's reset countdown ("42% · 2h"), the
-/// panel presentation the old extension used. Misconfigured accounts (no
-/// key, broken config) are deliberately absent from the bar — the popup
-/// keeps their rows and remedies; a bar is not the place to nag.
+/// `icon label 42%·5.3h │ …` — one severity-colored span per *working,
+/// non-exhausted* account, joined with a vertical bar like the GNOME panel's
+/// groups. Each tile carries its window figures with compact countdowns
+/// ("42%·5.3h 15%·2.3d"), the panel presentation the old extension used.
+/// Misconfigured accounts (no key, broken config) are deliberately absent
+/// from the bar — the popup keeps their rows and remedies — and so are
+/// exhausted ones (any window maxed, balance spent): a tile that is all
+/// zeros is noise until its reset lands. Both stay in the popup; a bar is
+/// not the place to nag.
 fn render_bar_text(entries: &[AggregateEntry], theme: &Theme, opts: &RenderOpts, now: DateTime<Utc>) -> String {
     let tiles: Vec<String> = entries
         .iter()
-        .filter(|entry| entry.error.is_none())
+        .filter(|entry| entry.error.is_none() && !entry.exhausted)
         .map(|entry| {
             let color = severity_color(entry.severity, theme);
             let tile = format!("{} {}", escape(&entry.label), {
@@ -337,19 +356,14 @@ fn render_bar_text(entries: &[AggregateEntry], theme: &Theme, opts: &RenderOpts,
                             if !figure.is_window {
                                 return escape(&figure.text);
                             }
-                            // First token of the countdown ("2h" of "2h 5m")
-                            // — a bar tile has room for one. A window that
-                            // has not started keeps its slot with a dash
-                            // instead of looking like a missing timer.
+                            // The compact one-unit countdown ("5.3h" of
+                            // "5h 20m") — a bar tile has room for one. A
+                            // window that has not started keeps its slot
+                            // with a dash instead of looking like a missing
+                            // timer.
                             let reset = figure
                                 .reset_at
-                                .map(|at| {
-                                    crate::countdown::format(Some(at), now)
-                                        .split_whitespace()
-                                        .next()
-                                        .unwrap_or("—")
-                                        .to_string()
-                                })
+                                .map(|at| crate::countdown::format_compact(Some(at), now))
                                 .unwrap_or_else(|| "-".to_string());
                             format!("{}·{}", escape(&figure.text), reset)
                         })
@@ -367,7 +381,9 @@ fn render_bar_text(entries: &[AggregateEntry], theme: &Theme, opts: &RenderOpts,
             _ => "󰚩".to_string(),
         };
     }
-    let joined = tiles.join("  │  ");
+    // No padding spaces around the divider — the │ glyph has whitespace of
+    // its own, and a bar stays readable only while it stays narrow.
+    let joined = tiles.join("│");
     let icon_prefix = match opts.icon.as_deref() {
         Some(ic) if !ic.is_empty() => format!("{ic} "),
         _ => String::new(),
@@ -578,8 +594,8 @@ mod tests {
         assert!(!text.contains("│"), "{text}");
     }
 
-    /// Tiles carry each window's own reset countdown, compact: the 5h figure
-    /// first, then the weekly one ("42%·2h 15%·2d").
+    /// Tiles carry each window's own reset countdown, compact one-unit form:
+    /// the 5h figure first, then the weekly one ("42%·2h 15%·2.1d").
     #[test]
     fn tiles_carry_both_windows_with_their_resets() {
         use chrono::TimeZone;
@@ -600,7 +616,7 @@ mod tests {
         let entries = vec![AggregateEntry::from_tab(&TabId::vendor(VendorId::Zai), &state, now)];
         let text = render_bar_text(&entries, &Theme::default(), &opts(), now);
         assert!(text.contains("42%·2h"), "{text}");
-        assert!(text.contains("15%·2d"), "{text}");
+        assert!(text.contains("15%·2.1d"), "{text}");
         assert!(!text.contains(" · "), "old single-figure spacing leaked: {text}");
     }
 
@@ -613,6 +629,45 @@ mod tests {
         let entries = vec![AggregateEntry::from_tab(&TabId::vendor(VendorId::Zai), &state, now)];
         let text = render_bar_text(&entries, &Theme::default(), &opts(), now);
         assert!(text.contains("0%·-"), "{text}");
+    }
+
+    /// An exhausted account (any window at 100) leaves the bar but keeps its
+    /// popup rows — the reset arrives with the next report, and until then a
+    /// maxed tile is pure noise. Recovery needs no state: the next snapshot
+    /// under 100 simply tiles again.
+    #[test]
+    fn exhausted_accounts_leave_the_bar_but_keep_their_popup_rows() {
+        let now = Utc::now();
+        let entries = vec![
+            AggregateEntry::from_tab(&TabId::vendor(VendorId::Zai), &zai_state(100), now),
+            AggregateEntry::from_tab(&TabId::vendor(VendorId::Kimi), &kimi_state(30), now),
+        ];
+        assert!(entries[0].exhausted);
+        assert!(!entries[1].exhausted);
+        let text = render_bar_text(&entries, &Theme::default(), &opts(), now);
+        assert!(!text.contains("100%"), "exhausted tile leaked into the bar: {text}");
+        assert!(!text.contains("│"), "a single tile must not draw a separator: {text}");
+        assert!(text.contains("30%"), "{text}");
+
+        // The popup still shows the maxed account with its figures.
+        let tooltip = render_tooltip(&entries, &Theme::default(), now);
+        assert!(tooltip.contains("Z.AI"), "{tooltip}");
+        assert!(tooltip.contains("100%"), "{tooltip}");
+    }
+
+    /// Every working account exhausted → no tiles, but the module never goes
+    /// empty (same fallback as every account erroring).
+    #[test]
+    fn all_exhausted_entries_leave_the_icon_alone() {
+        let now = Utc::now();
+        let entries = vec![AggregateEntry::from_tab(
+            &TabId::vendor(VendorId::Zai),
+            &zai_state(100),
+            now,
+        )];
+        let text = render_bar_text(&entries, &Theme::default(), &opts(), now);
+        assert!(!text.is_empty());
+        assert!(!text.contains("│"), "{text}");
     }
 
     #[test]

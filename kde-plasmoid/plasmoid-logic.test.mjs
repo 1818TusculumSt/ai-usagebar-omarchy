@@ -2,16 +2,16 @@
 // gnome-extension/marker-logic.test.mjs: node:assert/strict, no framework, no
 // dependency. Run with `node kde-plasmoid/plasmoid-logic.test.mjs`.
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {existsSync, readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {
     buildArgv, buildCommand, buildTuiCommand, DEFAULT_BINARY, DEFAULT_TIMEOUT_SECS,
     detailRows, entryFor, errorMessage, EXIT_KILLED, EXIT_TIMED_OUT, formatDuration,
-    headline, isAlarming, MAX_TIMEOUT_SECS, MIN_TIMEOUT_SECS,
-    metricDetail, nextVendor, paletteFromTheme, panelCells, parseReport,
-    resetRemainingMs, safeText, severityColor, severityOf, SEVERITIES, shellQuote,
-    shortLabel, shouldStartFetch, TIMEOUT_KILL_GRACE_SECS, timeoutSeconds,
-    updatedAgeMs, vendorTabs,
+    headline, isAlarming, LOGO_ASSETS, logoAssetName, MAX_TIMEOUT_SECS,
+    MIN_TIMEOUT_SECS, metricDetail, nextVendor, paletteFromTheme, panelCells,
+    parseReport, resetRemainingMs, safeText, severityColor, severityOf, SEVERITIES,
+    shellQuote, shortLabel, shouldStartFetch, TIMEOUT_KILL_GRACE_SECS,
+    timeoutSeconds, updatedAgeMs, vendorTabs,
 } from './package/contents/code/plasmoid-logic.mjs';
 
 const at = rel => fileURLToPath(new URL(rel, import.meta.url));
@@ -390,6 +390,38 @@ assert.equal(shouldStartFetch('cmd', 'cmd'), false, 'never queue a second identi
 assert.equal(shouldStartFetch('old', 'new'), false,
     'a config change must not start a second command while one is in flight');
 assert.equal(shouldStartFetch('', ''), false, 'an empty command is never executable');
+
+// ---------------------------------------------------------------------------
+// logos
+// ---------------------------------------------------------------------------
+// The mapping mirrors Rust's VendorId::logo_slug set; unknown or absent ids
+// resolve to '' so the compact representation renders nothing extra rather
+// than a broken image.
+assert.equal(logoAssetName('claude'), 'claude.svg');
+assert.equal(logoAssetName('openai'), 'openai.png');
+assert.equal(logoAssetName('nope'), '');
+assert.equal(logoAssetName(''), '');
+assert.equal(logoAssetName(null), '');
+assert.deepEqual(Object.keys(LOGO_ASSETS).sort(), [
+    'anthropic', 'antigravity', 'claude', 'cursor', 'deepseek', 'grok',
+    'kilo', 'kimi', 'kiro', 'minimax', 'moonshot', 'novita', 'openai',
+    'opencode', 'openrouter', 'zai',
+]);
+// Every mapped file ships inside the package.
+for (const [slug, file] of Object.entries(LOGO_ASSETS))
+    assert.equal(existsSync(at(`./package/contents/logos/${file}`)), true,
+        `logo asset ${slug} → ${file} is missing`);
+// The report's logo field rides through normalizeEntry untouched (bounded),
+// and older binaries without it default to ''.
+{
+    const report = parseReport(JSON.stringify({entries: [
+        {id: 'anthropic@work', logo: 'claude', display_name: 'Claude · work', status: 'ready', sections: []},
+        {id: 'zai', display_name: 'Z.AI', status: 'ready', sections: []},
+    ]}));
+    assert.equal(report.ok, true);
+    assert.equal(report.entries[0].logo, 'claude');
+    assert.equal(report.entries[1].logo, '');
+}
 
 // ---------------------------------------------------------------------------
 // theme

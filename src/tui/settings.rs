@@ -651,7 +651,12 @@ struct SettingsSnapshot {
 /// account type, the two team ids, API key LAST.
 #[derive(Debug, Serialize)]
 struct AccountStatus {
+    /// Machine vendor id ("zai", "kimi", "deepseek", …) — the QML groups and
+    /// the patch's `accounts.<vendor>` key.
     vendor: &'static str,
+    /// The vendor's display name ("Z.AI", "Kimi", …), Rust-owned so the
+    /// frontend never keeps its own vendor-name table.
+    vendor_display: String,
     /// Config label; "" marks the default `[zai]` section (no name field).
     label: String,
     /// Card title in the form.
@@ -661,6 +666,155 @@ struct AccountStatus {
     inline_configured: bool,
     environment_configured: bool,
     fields: Vec<FieldStatus>,
+}
+
+/// One key-account vendor rendered as Kimi-style cards by the native
+/// settings bridge: a default card plus one numbered card per
+/// `[[vendor.accounts]]` entry, positional addressing, optional per-account
+/// spend limit for the two Admin-API spend vendors.
+struct KeyAccountVendor {
+    id: VendorId,
+    display: &'static str,
+    section: &'static str,
+    /// The section's default env var name (shown as the environment hint).
+    env: &'static str,
+    /// Whether cards carry an editable `monthly_limit` field.
+    supports_limit: bool,
+    /// Kimi's default may hold the CLI's own OAuth login — removing it is
+    /// refused; every other vendor's default is just a key, so removal
+    /// clears it.
+    refuse_default_removal: bool,
+}
+
+/// Every vendor that manages keys as ACCOUNT CARDS, in panel display order.
+/// `openrouter`'s legacy hand-written labels are gone — the shared
+/// positional rule owns naming for all of these.
+const KEY_ACCOUNT_VENDORS: &[KeyAccountVendor] = &[
+    KeyAccountVendor { id: VendorId::Kimi, display: "Kimi", section: "kimi", env: "KIMI_API_KEY", supports_limit: false, refuse_default_removal: true },
+    KeyAccountVendor { id: VendorId::AnthropicApi, display: "Anthropic API", section: "anthropic_api", env: "ANTHROPIC_ADMIN_KEY", supports_limit: true, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::OpenaiApi, display: "OpenAI API", section: "openai_api", env: "OPENAI_ADMIN_KEY", supports_limit: true, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::Openrouter, display: "OpenRouter", section: "openrouter", env: "OPENROUTER_API_KEY", supports_limit: false, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::Deepseek, display: "DeepSeek", section: "deepseek", env: "DEEPSEEK_API_KEY", supports_limit: false, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::Kilo, display: "Kilo", section: "kilo", env: "KILO_API_KEY", supports_limit: false, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::Novita, display: "Novita", section: "novita", env: "NOVITA_API_KEY", supports_limit: false, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::Moonshot, display: "Moonshot", section: "moonshot", env: "MOONSHOT_API_KEY", supports_limit: false, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::Grok, display: "Grok", section: "grok", env: "XAI_MANAGEMENT_KEY", supports_limit: false, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::Minimax, display: "MiniMax", section: "minimax", env: "MINIMAX_API_KEY", supports_limit: false, refuse_default_removal: false },
+    KeyAccountVendor { id: VendorId::OpenCodeGo, display: "OpenCode Go", section: "opencode-go", env: "OPENCODE_GO_API_KEY", supports_limit: false, refuse_default_removal: false },
+];
+
+impl KeyAccountVendor {
+    /// The section's default inline key, when set.
+    fn default_inline_key<'a>(&self, cfg: &'a Config) -> Option<&'a str> {
+        let key = match self.id {
+            VendorId::Kimi => cfg.kimi.api_key.as_deref(),
+            VendorId::Openrouter => cfg.openrouter.api_key.as_deref(),
+            VendorId::Deepseek => cfg.deepseek.api_key.as_deref(),
+            VendorId::Kilo => cfg.kilo.api_key.as_deref(),
+            VendorId::Novita => cfg.novita.api_key.as_deref(),
+            VendorId::Moonshot => cfg.moonshot.api_key.as_deref(),
+            VendorId::Grok => cfg.grok.api_key.as_deref(),
+            VendorId::Minimax => cfg.minimax.api_key.as_deref(),
+            VendorId::OpenCodeGo => cfg.opencode_go.api_key.as_deref(),
+            VendorId::AnthropicApi => cfg.anthropic_api.api_key.as_deref(),
+            VendorId::OpenaiApi => cfg.openai_api.api_key.as_deref(),
+            _ => return None,
+        };
+        key.filter(|k| !k.is_empty())
+    }
+
+    /// The section-level monthly limit (the DEFAULT card's limit).
+    fn default_limit(&self, cfg: &Config) -> Option<f64> {
+        match self.id {
+            VendorId::AnthropicApi => cfg.anthropic_api.monthly_limit,
+            VendorId::OpenaiApi => cfg.openai_api.monthly_limit,
+            _ => None,
+        }
+    }
+}
+
+/// The account cards for one key-account vendor: the default section first
+/// (shown only when it has a key or the env var set, or when no numbered
+/// accounts exist — the Add button is the empty state), then one card per
+/// numbered account with its own key/limit state.
+fn key_account_cards(
+    spec: &KeyAccountVendor,
+    cfg: &Config,
+    environment_configured: &impl Fn(&str) -> bool,
+) -> Vec<AccountStatus> {
+    let accounts = cfg.key_accounts(spec.id).unwrap_or_default();
+    let env_ok = environment_configured(spec.env);
+    let inline = spec.default_inline_key(cfg);
+    let mut out = Vec::new();
+    if inline.is_some() || env_ok || accounts.is_empty() {
+        let mut fields = vec![secret_field()];
+        if spec.supports_limit {
+            fields.insert(0, limit_field(spec.default_limit(cfg)));
+        }
+        out.push(AccountStatus {
+            vendor: spec.section,
+            vendor_display: spec.display.to_string(),
+            label: String::new(),
+            display: "Default".into(),
+            environment: spec.env.to_string(),
+            configured: inline.is_some() || env_ok,
+            inline_configured: inline.is_some(),
+            environment_configured: env_ok,
+            fields,
+        });
+    }
+    for account in accounts {
+        let account_env_ok = account
+            .api_key_env
+            .as_deref()
+            .map(environment_configured)
+            .unwrap_or(false);
+        let account_inline = account.api_key.as_deref().is_some_and(|k| !k.is_empty());
+        let mut fields = vec![secret_field()];
+        if spec.supports_limit {
+            fields.insert(0, limit_field(account.monthly_limit));
+        }
+        out.push(AccountStatus {
+            vendor: spec.section,
+            vendor_display: spec.display.to_string(),
+            label: account.label.clone(),
+            display: account.label.clone(),
+            environment: account
+                .api_key_env
+                .clone()
+                .unwrap_or_else(|| "(inline key)".into()),
+            configured: account_inline || account_env_ok,
+            inline_configured: account_inline,
+            environment_configured: account_env_ok,
+            fields,
+        });
+    }
+    out
+}
+
+fn secret_field() -> FieldStatus {
+    FieldStatus {
+        id: "api_key".into(),
+        label: "API key".into(),
+        kind: "secret",
+        value: String::new(),
+        choices: Vec::new(),
+        labels: Default::default(),
+    }
+}
+
+fn limit_field(limit: Option<f64>) -> FieldStatus {
+    FieldStatus {
+        id: "monthly_limit".into(),
+        label: "Monthly limit (USD)".into(),
+        kind: "text",
+        value: limit
+            .filter(|l| l.is_finite() && *l > 0.0)
+            .map(|l| format!("{l}"))
+            .unwrap_or_default(),
+        choices: Vec::new(),
+        labels: Default::default(),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -713,8 +867,10 @@ struct ApplyRequest {
     accounts: BTreeMap<String, Vec<AccountMutation>>,
 }
 
-/// One Z.AI account mutation. `label` addresses an existing account
-/// ("" = the default `[zai]` section); `Add` carries the new `name`.
+/// One account mutation. `label` addresses an account by its POSITION
+/// ("" = the default section, "1".."n" = the accounts array top to bottom);
+/// `Add` appends and needs no name — every account is auto-named by its
+/// position at load.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "lowercase", deny_unknown_fields)]
 enum AccountMutation {
@@ -725,12 +881,51 @@ enum AccountMutation {
         api_key: Option<AccountKeyMutation>,
     },
     Add {
-        name: String,
+        /// Accepted so an older client's patch still deserializes; ignored —
+        /// the account's name is its position.
+        #[serde(default)]
+        #[allow(dead_code)]
+        name: Option<String>,
         #[serde(default)]
         fields: BTreeMap<String, String>,
         api_key: Option<AccountKeyMutation>,
     },
     Remove { label: String },
+}
+
+/// Resolve a settings-account address into a 0-based index into the vendor's
+/// accounts array. Accounts carry no stored names: the address IS the
+/// position ("1".."n"), and `live` bounds it by what this request has added
+/// or removed so far.
+fn account_index(vendor: &str, label: &str, live: usize) -> Result<usize> {
+    let position: usize = label.parse().map_err(|_| {
+        AppError::Other(format!(
+            "{vendor} accounts are addressed by position (\"1\"..\"{live}\"); {label:?} is not a position"
+        ))
+    })?;
+    if position == 0 || position > live {
+        return Err(AppError::Other(format!(
+            "{vendor} account {label:?} does not exist (positions are 1..={live})"
+        )));
+    }
+    Ok(position - 1)
+}
+
+/// Legacy cleanup: account names are positional now, so a `label` key left
+/// in the accounts array by an older format is dead weight. Drop them all
+/// whenever the bridge touches the vendor's accounts — one save cleans the
+/// whole section.
+fn strip_legacy_labels(doc: &mut DocumentMut, section: &str) {
+    if let Some(accounts) = doc
+        .get_mut(section)
+        .and_then(|item| item.as_table_mut())
+        .and_then(|table| table.get_mut("accounts"))
+        .and_then(|item| item.as_array_of_tables_mut())
+    {
+        for entry in accounts.iter_mut() {
+            entry.remove("label");
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -784,6 +979,12 @@ fn snapshot_from_config_with(
     cfg: &Config,
     environment_configured: impl Fn(&str) -> bool,
 ) -> SettingsSnapshot {
+    // The panel sees the SAME positional names the runtime uses — derive
+    // even for a hand-built Config so a direct snapshot can never leak a
+    // stale file label.
+    let mut cfg = cfg.clone();
+    cfg.derive_account_labels();
+    let cfg = &cfg;
     let state = SettingsState::from_config(cfg);
     let primary_choices = state
         .primary_choices
@@ -793,11 +994,15 @@ fn snapshot_from_config_with(
             label: id.display_name().to_string(),
         })
         .collect();
-    // Z.AI and Kimi moved to the account list — their old key cards are
-    // gone from `keys` (the apply path still accepts legacy key mutations).
+    // Z.AI and every key-account vendor moved to the account-card list —
+    // their old key cards are gone from `keys` (the apply path still accepts
+    // legacy key mutations for the TUI overlay).
+    let account_card_vendors: Vec<VendorId> = std::iter::once(VendorId::Zai)
+        .chain(KEY_ACCOUNT_VENDORS.iter().map(|spec| spec.id))
+        .collect();
     let keys = KEY_VENDORS
         .iter()
-        .filter(|vendor| !matches!(vendor.id, VendorId::Zai | VendorId::Kimi))
+        .filter(|vendor| !account_card_vendors.contains(&vendor.id))
         .map(|vendor| {
             let environment = configured_key_env(cfg, vendor.section, vendor.env);
             let inline_configured =
@@ -821,38 +1026,22 @@ fn snapshot_from_config_with(
         keys,
         accounts: zai_account_status(cfg, &environment_configured)
             .into_iter()
-            .chain(kimi_account_status(cfg, &environment_configured))
+            .chain(KEY_ACCOUNT_VENDORS.iter().flat_map(|spec| {
+                key_account_cards(spec, cfg, &environment_configured)
+            }))
             .collect(),
     }
 }
 
-/// One account card's editable fields, in the form's order: name, site,
-/// account type, the two team ids (team only), API key last.
+/// One account card's editable fields, in the form's order: account type,
+/// the two team ids (team only), API key last.
+///
+/// No name field: the bar tags accounts with the provider logo now, so
+/// accounts are named where they are created — adds auto-name server-side
+/// (`auto_account_label`), and a rename stays a config.toml edit.
 fn zai_account_fields(label: &str, kind: ZaiAccountType, _site: &str, org: &str, proj: &str) -> Vec<FieldStatus> {
-    zai_account_fields_with_default_name(label, kind, _site, org, proj, false)
-}
-
-/// `default_nameable`: the default section carries a name field when its
-/// inline key can be moved into a named account.
-fn zai_account_fields_with_default_name(
-    label: &str,
-    kind: ZaiAccountType,
-    _site: &str,
-    org: &str,
-    proj: &str,
-    default_nameable: bool,
-) -> Vec<FieldStatus> {
+    let _ = label;
     let mut fields = Vec::new();
-    if !label.is_empty() || default_nameable {
-        fields.push(FieldStatus {
-            id: "name".into(),
-            label: "Name".into(),
-            kind: "text",
-            value: label.to_string(),
-            choices: Vec::new(),
-            labels: Default::default(),
-        });
-    }
     // NOTE: no site field anymore — the site (z.ai / bigmodel.cn) is
     // auto-detected from the account type (team & usage live on bigmodel.cn,
     // personal on z.ai); a hand-edited `site` in config.toml still overrides.
@@ -895,99 +1084,6 @@ fn zai_account_fields_with_default_name(
     fields
 }
 
-/// The Kimi account list. Region/deployment stays auto-detected — the only
-/// user-editable fields are the name and the API key.
-fn kimi_account_status(
-    cfg: &Config,
-    environment_configured: &impl Fn(&str) -> bool,
-) -> Vec<AccountStatus> {
-    let env = cfg.kimi.api_key_env.clone();
-    let env_configured = environment_configured(&env);
-    let inline = cfg.kimi.api_key.as_deref().is_some_and(|v| !v.is_empty());
-    let cli_logged_in = crate::kimi::oauth::default_home()
-        .map(|home| {
-            let path = match &cfg.kimi.credentials_path {
-                Some(p) => p.clone(),
-                None => crate::kimi::oauth::credentials_path_in(&home),
-            };
-            crate::kimi::oauth::is_logged_in(&path)
-        })
-        .unwrap_or(false);
-    let mut out = Vec::new();
-    if inline || env_configured || cli_logged_in {
-        // A name on the default converts it into a named account (the key
-        // moves); only an INLINE key can move — a CLI login or env-var key
-        // is not ours to relocate, so those defaults show no name field.
-        let mut fields = Vec::new();
-        if inline {
-            fields.push(FieldStatus {
-                id: "name".into(),
-                label: "Name".into(),
-                kind: "text",
-                value: String::new(),
-                choices: Vec::new(),
-                labels: Default::default(),
-            });
-        }
-        fields.push(FieldStatus {
-            id: "api_key".into(),
-            label: "API key".into(),
-            kind: "secret",
-            value: String::new(),
-            choices: Vec::new(),
-            labels: Default::default(),
-        });
-        out.push(AccountStatus {
-            vendor: "kimi",
-            label: String::new(),
-            display: "Default".into(),
-            environment: env.clone(),
-            configured: true,
-            inline_configured: inline,
-            environment_configured: env_configured,
-            fields,
-        });
-    }
-    for account in &cfg.kimi.accounts {
-        let account_env_configured = account
-            .api_key_env
-            .as_deref()
-            .map(environment_configured)
-            .unwrap_or(false);
-        let mut fields = vec![FieldStatus {
-            id: "name".into(),
-            label: "Name".into(),
-            kind: "text",
-            value: account.label.clone(),
-            choices: Vec::new(),
-            labels: Default::default(),
-        }];
-        fields.push(FieldStatus {
-            id: "api_key".into(),
-            label: "API key".into(),
-            kind: "secret",
-            value: String::new(),
-            choices: Vec::new(),
-            labels: Default::default(),
-        });
-        out.push(AccountStatus {
-            vendor: "kimi",
-            label: account.label.clone(),
-            display: account.label.clone(),
-            environment: account
-                .api_key_env
-                .clone()
-                .unwrap_or_else(|| "(inline key)".into()),
-            configured: account.api_key.as_deref().is_some_and(|v| !v.is_empty())
-                || account_env_configured,
-            inline_configured: account.api_key.as_deref().is_some_and(|v| !v.is_empty()),
-            environment_configured: account_env_configured,
-            fields,
-        });
-    }
-    out
-}
-
 /// The Z.AI account list: the default `[zai]` section first (label "",
 /// displayed as "Default"), then every `[[zai.accounts]]` entry.
 #[allow(clippy::too_many_arguments)]
@@ -1003,6 +1099,7 @@ fn zai_account_status(
     if default_configured {
         out.push(AccountStatus {
         vendor: "zai",
+        vendor_display: "Z.AI".into(),
         label: String::new(),
         display: "Default".into(),
         environment: env.clone(),
@@ -1010,7 +1107,7 @@ fn zai_account_status(
             || env_configured,
         inline_configured: cfg.zai.api_key.as_deref().is_some_and(|v| !v.is_empty()),
         environment_configured: env_configured,
-        fields: zai_account_fields_with_default_name(
+        fields: zai_account_fields(
             "",
             cfg.zai.account_type,
             &match cfg.zai.site {
@@ -1020,7 +1117,6 @@ fn zai_account_status(
             },
             cfg.zai.organization_id.as_deref().unwrap_or(""),
             cfg.zai.project_id.as_deref().unwrap_or(""),
-            default_inline,
         ),
         });
     }
@@ -1032,6 +1128,7 @@ fn zai_account_status(
             .unwrap_or(false);
         out.push(AccountStatus {
             vendor: "zai",
+            vendor_display: "Z.AI".into(),
             label: account.label.clone(),
             display: account.label.clone(),
             environment: account
@@ -1213,7 +1310,6 @@ fn apply_settings_json_to_path(cfg: &Config, raw: &str, path: &Path) -> Result<(
 
 /// Parsed, validated account field patch.
 struct AccountFields {
-    name: Option<String>,
     site: Option<String>,
     account_type: Option<String>,
     organization_id: Option<String>,
@@ -1224,7 +1320,7 @@ impl AccountFields {
     fn parse(fields: &BTreeMap<String, String>) -> Result<Self> {
         fn clean<'v>(field: &str, v: &'v str) -> Result<&'v str> {
             // Trimmed before validation: copy-paste drags trailing tabs and
-            // newlines onto ids and names, and those are whitespace, not
+            // newlines onto ids, and those are whitespace, not
             // control-character attacks. Interior control chars still reject.
             let trimmed = v.trim();
             if trimmed.chars().any(char::is_control) {
@@ -1240,7 +1336,6 @@ impl AccountFields {
             Ok(trimmed)
         }
         let mut out = AccountFields {
-            name: None,
             site: None,
             account_type: None,
             organization_id: None,
@@ -1248,7 +1343,14 @@ impl AccountFields {
         };
         for (field, value) in fields {
             match field.as_str() {
-                "name" => out.name = Some(clean(field, value)?.to_string()),
+                // Accounts are named by position now; an older client still
+                // sending a name gets a clear refusal rather than a silent
+                // no-op.
+                "name" => {
+                    return Err(AppError::Other(
+                        "accounts are auto-named by their position (1, 2, …); the name field is gone".into(),
+                    ));
+                }
                 "site" => {
                     let value = clean(field, value)?;
                     if !["", "global", "cn"].contains(&value) {
@@ -1304,7 +1406,11 @@ fn validate_account_key(value: &str) -> Result<()> {
 /// keep organization ids around.
 fn apply_account_mutations_to_path(cfg: &Config, request: &ApplyRequest, path: &Path) -> Result<()> {
     for vendor in request.accounts.keys() {
-        if !matches!(vendor.as_str(), "zai" | "kimi") {
+        if vendor != "zai"
+            && !KEY_ACCOUNT_VENDORS
+                .iter()
+                .any(|spec| spec.section == vendor.as_str())
+        {
             return Err(AppError::Other(format!(
                 "vendor {vendor:?} has no account list"
             )));
@@ -1328,10 +1434,17 @@ fn apply_account_mutations_to_path(cfg: &Config, request: &ApplyRequest, path: &
     };
 
     for (vendor, mutations) in &request.accounts {
-        match vendor.as_str() {
-            "zai" => apply_zai_mutations(&mut doc, cfg, mutations)?,
-            "kimi" => apply_kimi_mutations(&mut doc, cfg, mutations)?,
-            other => return Err(AppError::Other(format!("vendor {other:?} has no account list"))),
+        if vendor == "zai" {
+            apply_zai_mutations(&mut doc, cfg, mutations)?;
+        } else if let Some(spec) = KEY_ACCOUNT_VENDORS
+            .iter()
+            .find(|spec| spec.section == vendor.as_str())
+        {
+            apply_key_account_mutations(&mut doc, cfg, spec, mutations)?;
+        } else {
+            return Err(AppError::Other(format!(
+                "vendor {vendor:?} has no account list"
+            )));
         }
     }
 
@@ -1350,20 +1463,11 @@ fn apply_account_mutations_to_path(cfg: &Config, request: &ApplyRequest, path: &
 }
 
 fn apply_zai_mutations(doc: &mut DocumentMut, cfg: &Config, mutations: &[AccountMutation]) -> Result<()> {
-    // Running label set: starts from the loaded config and follows every
-    // mutation in this request, so remove+add of the same name in one save
-    // works and duplicate adds are caught.
-    let mut live_labels: std::collections::BTreeSet<String> = std::iter::once(String::new())
-        .chain(cfg.zai.accounts.iter().map(|a| a.label.clone()))
-        .collect();
-    let label_taken = |labels: &std::collections::BTreeSet<String>,
-                       label: &str,
-                       skip: Option<&str>|
-     -> bool {
-        labels
-            .iter()
-            .any(|l| l == label && Some(l.as_str()) != skip)
-    };
+    // Accounts are addressed by position; `live_count` follows every add and
+    // remove in this request, in order, so a sequence like remove-2 + add
+    // composes exactly as the panel previewed it.
+    strip_legacy_labels(doc, "zai");
+    let mut live_count = cfg.zai.accounts.len();
 
     for mutation in mutations {
         match mutation {
@@ -1373,129 +1477,41 @@ fn apply_zai_mutations(doc: &mut DocumentMut, cfg: &Config, mutations: &[Account
                 api_key,
             } => {
                 let parsed = AccountFields::parse(fields)?;
-                if !live_labels.contains(label) {
-                    return Err(AppError::Other(format!(
-                        "unknown zai account {label:?}"
-                    )));
-                }
                 if label.is_empty() {
-                    if let Some(name) = &parsed.name {
-                        // Naming the default moves its inline key (and the
-                        // billing fields being set) into a named account.
-                        let inline = cfg.zai.api_key.clone().filter(|k| !k.is_empty());
-                        let Some(inline) = inline else {
-                            return Err(AppError::Other(
-                                "the default zai account has no inline key to name — set the \
-                                 key first or add a named account instead"
-                                    .into(),
-                            ));
-                        };
-                        let mut table = toml_edit::Table::new();
-                        table.insert("label", toml_edit::value(name));
-                        write_account_fields(&mut table, &parsed)?;
-                        if let Some(key) = api_key.as_ref() {
-                            apply_account_key_to_table(&mut table, Some(key))?;
-                        } else {
-                            table.insert("api_key", toml_edit::value(inline));
-                        }
-                        accounts_array_mut(doc, "zai")?.push(table);
-                        if let Some(table) = doc.get_mut("zai").and_then(toml_edit::Item::as_table_mut) {
-                            for key in ["api_key", "account_type", "site", "organization_id", "project_id"] {
-                                table.remove(key);
-                            }
-                        }
-                        live_labels.insert(name.clone());
-                    } else {
-                        let table = doc
-                            .entry("zai")
-                            .or_insert_with(toml_edit::table)
-                            .as_table_mut()
-                            .ok_or_else(|| {
-                                AppError::Other("config.toml: [zai] is not a table".into())
-                            })?;
-                        write_account_fields(table, &parsed)?;
-                        apply_account_key_to_table(table, api_key.as_ref())?;
-                    }
+                    let table = doc
+                        .entry("zai")
+                        .or_insert_with(toml_edit::table)
+                        .as_table_mut()
+                        .ok_or_else(|| {
+                            AppError::Other("config.toml: [zai] is not a table".into())
+                        })?;
+                    write_account_fields(table, &parsed)?;
+                    apply_account_key_to_table(table, api_key.as_ref())?;
                 } else {
-                    if let Some(name) = &parsed.name {
-                        if name.is_empty() || name == label {
-                            return Err(AppError::Other(format!(
-                                "rename of zai account {label:?} needs a new, non-empty name"
-                            )));
-                        }
-                        crate::config::validate_account_label_for("zai", name)?;
-                        if label_taken(&live_labels, name, Some(label.as_str())) {
-                            return Err(AppError::Other(format!(
-                                "zai account name {name:?} is already in use"
-                            )));
-                        }
-                    }
-                    let is_team = parsed.account_type.as_deref()
-                        == Some("team")
-                        || (parsed.account_type.is_none()
-                            && cfg
-                                .zai
-                                .accounts
-                                .iter()
-                                .find(|a| &a.label == label)
-                                .is_some_and(|a| a.account_type == ZaiAccountType::Team));
-                    rename_or_update_account(doc, label, &parsed, is_team, api_key.as_ref())?;
-                    if let Some(name) = &parsed.name {
-                        note_rename(&mut live_labels, label, name);
-                    }
+                    let index = account_index("zai", label, live_count)?;
+                    let accounts = accounts_array_mut(doc, "zai")?;
+                    let entry = accounts
+                        .get_mut(index)
+                        .ok_or_else(|| AppError::Other(format!("unknown zai account {label:?}")))?;
+                    update_account_entry(entry, &parsed, api_key.as_ref())?;
                 }
             }
             AccountMutation::Add {
-                name,
                 fields,
                 api_key,
+                ..
             } => {
-                let name = name.trim();
-                crate::config::validate_account_label_for("zai", name)?;
-                if label_taken(&live_labels, name, None) {
-                    return Err(AppError::Other(format!(
-                        "zai account name {name:?} is already in use"
-                    )));
-                }
                 let parsed = AccountFields::parse(fields)?;
-                if parsed.name.is_some() {
-                    return Err(AppError::Other(
-                        "use the top-level name for a new account".into(),
-                    ));
-                }
+                // No label written: the entry's name is its position, derived
+                // on every load. Appending is all "naming" there is.
                 let mut table = toml_edit::Table::new();
-                table.insert("label", toml_edit::value(name));
                 write_account_fields(&mut table, &parsed)?;
                 let sets_key = matches!(api_key, Some(AccountKeyMutation::Set { .. }));
                 if let Some(key) = api_key.as_ref() {
                     apply_account_key_to_table(&mut table, Some(key))?;
                 }
-                let zai_table = doc
-                    .entry("zai")
-                    .or_insert_with(toml_edit::table)
-                    .as_table_mut()
-                    .ok_or_else(|| AppError::Other("config.toml: [zai] is not a table".into()))?;
-                let accounts = if zai_table.contains_key("accounts") {
-                    zai_table
-                        .get_mut("accounts")
-                        .and_then(toml_edit::Item::as_array_of_tables_mut)
-                        .ok_or_else(|| {
-                            AppError::Other(
-                                "config.toml: zai.accounts is not an array of tables".into(),
-                            )
-                        })?
-                } else {
-                    zai_table.insert(
-                        "accounts",
-                        toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()),
-                    );
-                    zai_table
-                        .get_mut("accounts")
-                        .and_then(toml_edit::Item::as_array_of_tables_mut)
-                        .expect("just inserted as array of tables")
-                };
-                accounts.push(table);
-                live_labels.insert(name.to_string());
+                accounts_array_mut(doc, "zai")?.push(table);
+                live_count += 1;
                 // A key arriving through the form opts the vendor in,
                 // matching the plain key-card behaviour.
                 if sets_key {
@@ -1503,12 +1519,6 @@ fn apply_zai_mutations(doc: &mut DocumentMut, cfg: &Config, mutations: &[Account
                 }
             }
             AccountMutation::Remove { label } => {
-                if !live_labels.contains(label) {
-                    return Err(AppError::Other(format!(
-                        "unknown zai account {label:?}"
-                    )));
-                }
-                live_labels.remove(label);
                 if label.is_empty() {
                     // Removing the default resets the section to a bare
                     // table: key and every billing field go, so the card
@@ -1526,7 +1536,9 @@ fn apply_zai_mutations(doc: &mut DocumentMut, cfg: &Config, mutations: &[Account
                         table.remove(key);
                     }
                 } else {
-                    remove_account(doc, "zai", label)?;
+                    let index = account_index("zai", label, live_count)?;
+                    remove_account_at(doc, "zai", index)?;
+                    live_count -= 1;
                 }
             }
         }
@@ -1534,20 +1546,18 @@ fn apply_zai_mutations(doc: &mut DocumentMut, cfg: &Config, mutations: &[Account
     Ok(())
 }
 
-/// Kimi accounts: name + key only — region stays auto-detected. The default
-/// `[kimi]` section is only ever key-cleared (its login may be the CLI's).
-fn apply_kimi_mutations(doc: &mut DocumentMut, cfg: &Config, mutations: &[AccountMutation]) -> Result<()> {
-    let mut live_labels: std::collections::BTreeSet<String> = std::iter::once(String::new())
-        .chain(cfg.kimi.accounts.iter().map(|a| a.label.clone()))
-        .collect();
-    let label_taken = |labels: &std::collections::BTreeSet<String>,
-                       label: &str,
-                       skip: Option<&str>|
-     -> bool {
-        labels
-            .iter()
-            .any(|l| l == label && Some(l.as_str()) != skip)
-    };
+/// Key-account vendors: every account is its own key (and, for the two
+/// spend vendors, its own monthly limit). Names are positional; the address
+/// IS the position. Kimi's default may hold the CLI's own OAuth login —
+/// its removal is refused; every other vendor's default is just a key.
+fn apply_key_account_mutations(
+    doc: &mut DocumentMut,
+    cfg: &Config,
+    spec: &KeyAccountVendor,
+    mutations: &[AccountMutation],
+) -> Result<()> {
+    strip_legacy_labels(doc, spec.section);
+    let mut live_count = cfg.key_accounts(spec.id).map_or(0, |a| a.len());
     for mutation in mutations {
         match mutation {
             AccountMutation::Update {
@@ -1555,136 +1565,142 @@ fn apply_kimi_mutations(doc: &mut DocumentMut, cfg: &Config, mutations: &[Accoun
                 fields,
                 api_key,
             } => {
-                if !live_labels.contains(label) {
-                    return Err(AppError::Other(format!(
-                        "unknown kimi account {label:?}"
-                    )));
-                }
-                let rename = match fields.get("name") {
-                    Some(name) => {
-                        let name = name.trim();
-                        if name.is_empty() || name == label {
-                            return Err(AppError::Other(format!(
-                                "rename of kimi account {label:?} needs a new, non-empty name"
-                            )));
-                        }
-                        crate::config::validate_account_label_for("kimi", name)?;
-                        if label_taken(&live_labels, name, Some(label.as_str())) {
-                            return Err(AppError::Other(format!(
-                                "kimi account name {name:?} is already in use"
-                            )));
-                        }
-                        Some(name.to_string())
-                    }
-                    None => None,
-                };
-                for field in fields.keys() {
-                    if field != "name" {
-                        return Err(AppError::Other(format!(
-                            "kimi accounts have no field {field:?} — region is auto-detected"
-                        )));
-                    }
-                }
+                let limit = parse_limit_field(spec, fields)?;
                 if label.is_empty() {
-                    if let Some(name) = &rename {
-                        // Naming the default moves its inline key into a
-                        // named account; the section resets to bare.
-                        let inline = cfg.kimi.api_key.clone().filter(|k| !k.is_empty());
-                        let Some(inline) = inline else {
-                            return Err(AppError::Other(
-                                "the default kimi account has no inline key to name — a CLI \
-                                 login or environment key cannot move; add a named account \
-                                 instead"
-                                    .into(),
-                            ));
-                        };
-                        let mut table = toml_edit::Table::new();
-                        table.insert("label", toml_edit::value(name));
-                        if let Some(key) = api_key.as_ref() {
-                            apply_account_key_to_table(&mut table, Some(key))?;
-                        } else {
-                            table.insert("api_key", toml_edit::value(inline));
-                        }
-                        accounts_array_mut(doc, "kimi")?.push(table);
-                        if let Some(table) = doc.get_mut("kimi").and_then(toml_edit::Item::as_table_mut) {
-                            table.remove("api_key");
-                        }
-                        live_labels.insert(name.clone());
-                        return Ok(());
-                    }
                     let table = doc
-                        .entry("kimi")
+                        .entry(spec.section)
                         .or_insert_with(toml_edit::table)
                         .as_table_mut()
                         .ok_or_else(|| {
-                            AppError::Other("config.toml: [kimi] is not a table".into())
+                            AppError::Other(format!(
+                                "config.toml: [{}] is not a table",
+                                spec.section
+                            ))
                         })?;
                     apply_account_key_to_table(table, api_key.as_ref())?;
+                    apply_limit_to_table(table, limit)?;
                 } else {
-                    let accounts = accounts_array_mut(doc, "kimi")?;
-                    let entry = accounts
-                        .iter_mut()
-                        .find(|table| table.get("label").and_then(|l| l.as_str()) == Some(label))
-                        .ok_or_else(|| {
-                            AppError::Other(format!("unknown kimi account {label:?}"))
-                        })?;
-                    if let Some(name) = &rename {
-                        if let Some(item) = entry.get_mut("label")
-                            && let Some(value) = item.as_value_mut()
-                        {
-                            *value = toml_edit::Value::from(name);
-                        } else {
-                            entry.insert("label", toml_edit::value(name));
-                        }
-                        note_rename(&mut live_labels, label, name);
-                    }
+                    let index = account_index(spec.display, label, live_count)?;
+                    let accounts = accounts_array_mut(doc, spec.section)?;
+                    let entry = accounts.get_mut(index).ok_or_else(|| {
+                        AppError::Other(format!("unknown {} account {label:?}", spec.display))
+                    })?;
                     apply_account_key_to_table(entry, api_key.as_ref())?;
+                    apply_limit_to_table(entry, limit)?;
                 }
             }
             AccountMutation::Add {
-                name,
                 fields,
                 api_key,
+                ..
             } => {
-                let name = name.trim();
-                crate::config::validate_account_label_for("kimi", name)?;
-                if label_taken(&live_labels, name, None) {
-                    return Err(AppError::Other(format!(
-                        "kimi account name {name:?} is already in use"
-                    )));
-                }
-                if !fields.is_empty() {
-                    return Err(AppError::Other(
-                        "kimi accounts take only a name and an API key".into(),
-                    ));
-                }
+                let limit = parse_limit_field(spec, fields)?;
+                // No label written: the entry's name is its position,
+                // derived on every load. Appending is all "naming" there is.
                 let mut table = toml_edit::Table::new();
-                table.insert("label", toml_edit::value(name));
                 let sets_key = matches!(api_key, Some(AccountKeyMutation::Set { .. }));
                 if let Some(key) = api_key.as_ref() {
                     apply_account_key_to_table(&mut table, Some(key))?;
                 }
-                accounts_array_mut(doc, "kimi")?.push(table);
-                live_labels.insert(name.to_string());
+                apply_limit_to_table(&mut table, limit)?;
+                accounts_array_mut(doc, spec.section)?.push(table);
+                live_count += 1;
+                // A key arriving through the form opts the vendor in,
+                // matching the plain key-card behaviour.
                 if sets_key {
-                    set_bool(doc, "kimi", "enabled", true)?;
+                    set_bool(doc, spec.section, "enabled", true)?;
                 }
             }
             AccountMutation::Remove { label } => {
-                if !live_labels.contains(label) {
-                    return Err(AppError::Other(format!(
-                        "unknown kimi account {label:?}"
-                    )));
-                }
-                live_labels.remove(label);
                 if label.is_empty() {
-                    // The default's login may be the CLI's own — only the
-                    // inline key goes; use the key clear action for that.
-                    return Err(AppError::Other(
-                        "the default kimi account cannot be removed; clear its key instead".into(),
-                    ));
+                    if spec.refuse_default_removal {
+                        return Err(AppError::Other(
+                            "the default kimi account cannot be removed; clear its key instead"
+                                .into(),
+                        ));
+                    }
+                    // Removing the default clears its key (and limit): the
+                    // card was shown for that key, so it goes with it.
+                    let table = doc
+                        .entry(spec.section)
+                        .or_insert_with(toml_edit::table)
+                        .as_table_mut()
+                        .ok_or_else(|| {
+                            AppError::Other(format!(
+                                "config.toml: [{}] is not a table",
+                                spec.section
+                            ))
+                        })?;
+                    table.remove("api_key");
+                    if spec.supports_limit {
+                        table.remove("monthly_limit");
+                    }
+                } else {
+                    let index = account_index(spec.display, label, live_count)?;
+                    remove_account_at(doc, spec.section, index)?;
+                    live_count -= 1;
                 }
-                remove_account(doc, "kimi", label)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The `monthly_limit` text field: `None` when the patch does not mention
+/// it; `Some(None)` (empty string) removes it; `Some(value)` sets it.
+/// Every other field is rejected — these accounts are a key and, for the
+/// spend vendors, a limit; nothing else is per-account.
+fn parse_limit_field(
+    spec: &KeyAccountVendor,
+    fields: &BTreeMap<String, String>,
+) -> Result<Option<Option<f64>>> {
+    for field in fields.keys() {
+        if field != "monthly_limit" {
+            return Err(AppError::Other(format!(
+                "{} accounts have no field {field:?} — an account is its key (and, for the \
+                 spend vendors, its monthly limit); everything else is vendor-level",
+                spec.display
+            )));
+        }
+    }
+    let Some(raw) = fields.get("monthly_limit") else {
+        return Ok(None);
+    };
+    if !spec.supports_limit {
+        return Err(AppError::Other(format!(
+            "{} accounts have no monthly_limit — it exists only for the spend-monitoring \
+             vendors (Anthropic API, OpenAI API)",
+            spec.display
+        )));
+    }
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Some(None));
+    }
+    let value: f64 = trimmed.parse().map_err(|_| {
+        AppError::Other(format!(
+            "{} monthly_limit {trimmed:?} is not a number",
+            spec.display
+        ))
+    })?;
+    if !value.is_finite() || value <= 0.0 {
+        return Err(AppError::Other(format!(
+            "{} monthly_limit must be finite and greater than zero; clear the field to \
+             show spend without a limit",
+            spec.display
+        )));
+    }
+    Ok(Some(Some(value)))
+}
+
+fn apply_limit_to_table(table: &mut toml_edit::Table, limit: Option<Option<f64>>) -> Result<()> {
+    if let Some(limit) = limit {
+        match limit {
+            Some(value) => {
+                table.insert("monthly_limit", toml_edit::value(value));
+            }
+            None => {
+                table.remove("monthly_limit");
             }
         }
     }
@@ -1779,36 +1795,27 @@ fn apply_account_key_to_table(
     Ok(())
 }
 
-fn rename_or_update_account(
-    doc: &mut DocumentMut,
-    label: &str,
+/// Write fields + key into one existing `[[zai.accounts]]` entry (already
+/// resolved by position). No label handling — the position IS the identity.
+fn update_account_entry(
+    entry: &mut toml_edit::Table,
     parsed: &AccountFields,
-    is_team: bool,
     api_key: Option<&AccountKeyMutation>,
 ) -> Result<()> {
-    let accounts = doc
-        .get_mut("zai")
-        .and_then(|item| item.as_table_mut())
-        .and_then(|table| table.get_mut("accounts"))
-        .and_then(|item| item.as_array_of_tables_mut())
-        .ok_or_else(|| AppError::Other("config.toml: zai.accounts is not an array of tables".into()))?;
-    let entry = accounts
-        .iter_mut()
-        .find(|table| table.get("label").and_then(|l| l.as_str()) == Some(label))
-        .ok_or_else(|| AppError::Other(format!("unknown zai account {label:?}")))?;
-    if let Some(name) = &parsed.name {
-        if let Some(item) = entry.get_mut("label")
-            && let Some(value) = item.as_value_mut()
-        {
-            *value = toml_edit::Value::from(name);
-        } else {
-            entry.insert("label", toml_edit::value(name));
-        }
-    }
     // Type (possibly unchanged) decides whether the ids may exist at all.
-    let effective_team = parsed.account_type.as_deref().map(|k| k == "team").unwrap_or(is_team);
+    // The file's own value is the source of truth — cfg and doc were parsed
+    // from the same bytes, and entries added earlier in THIS request exist
+    // only in the doc.
+    let is_team = entry
+        .get("account_type")
+        .and_then(|v| v.as_str())
+        .is_some_and(|kind| kind == "team");
+    let effective_team = parsed
+        .account_type
+        .as_deref()
+        .map(|kind| kind == "team")
+        .unwrap_or(is_team);
     let mut effective = AccountFields {
-        name: None,
         site: parsed.site.clone(),
         account_type: parsed.account_type.clone(),
         organization_id: parsed.organization_id.clone(),
@@ -1823,28 +1830,16 @@ fn rename_or_update_account(
     Ok(())
 }
 
-/// Keep the caller's running label set in step with a rename.
-fn note_rename(labels: &mut std::collections::BTreeSet<String>, old: &str, new: &str) {
-    labels.remove(old);
-    labels.insert(new.to_string());
-}
-
-fn remove_account(doc: &mut DocumentMut, section: &str, label: &str) -> Result<()> {
-    let accounts = doc
-        .get_mut(section)
-        .and_then(|item| item.as_table_mut())
-        .and_then(|table| table.get_mut("accounts"))
-        .and_then(|item| item.as_array_of_tables_mut())
-        .ok_or_else(|| {
-            AppError::Other(format!(
-                "config.toml: {section}.accounts is not an array of tables"
-            ))
-        })?;
-    let before = accounts.len();
-    accounts.retain(|table| table.get("label").and_then(|l| l.as_str()) != Some(label));
-    if accounts.len() == before {
-        return Err(AppError::Other(format!("unknown zai account {label:?}")));
+/// Drop the n-th (0-based) entry of a vendor's accounts array.
+fn remove_account_at(doc: &mut DocumentMut, section: &str, index: usize) -> Result<()> {
+    let accounts = accounts_array_mut(doc, section)?;
+    if index >= accounts.len() {
+        return Err(AppError::Other(format!(
+            "config.toml: {section}.accounts has no entry at position {}",
+            index + 1
+        )));
     }
+    accounts.remove(index);
     Ok(())
 }
 
@@ -2160,68 +2155,197 @@ mod tests {
             .iter()
             .map(|f| f["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, vec!["name", "api_key"],
-            "no region field — auto-detected; the inline default key is nameable");
+        assert_eq!(ids, vec!["api_key"],
+            "no name and no region field — accounts auto-name on add, region is auto-detected");
 
         // An unconfigured kimi shows no default card at all.
         let bare = settings_snapshot_json_with(&Config::default(), |_| false)
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&bare).unwrap();
-        assert!(parsed["accounts"]
+        // The empty state: kimi's ONLY card is the default one (its Add
+        // button), with no numbered cards until a key is added.
+        let kimi: Vec<&serde_json::Value> = parsed["accounts"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|a| a["vendor"] != "kimi"));
+            .filter(|a| a["vendor"] == "kimi")
+            .collect();
+        assert_eq!(kimi.len(), 1, "empty state is exactly the Add entry");
+        assert_eq!(kimi[0]["label"], "");
+        assert_eq!(kimi[0]["vendor_display"], "Kimi");
 
-        // Add + rename + remove via mutations.
+        // Add + key-only update + remove via positional mutations.
         let (_td, path) = temp_config(None);
         let patch = r#"{"schema_version":1,"accounts":{"kimi":[
-            {"action":"add","name":"work","api_key":{"action":"set","value":"k"}}]}}"#;
+            {"action":"add","api_key":{"action":"set","value":"k"}}]}}"#;
         apply_settings_json_to_path(&Config::default(), patch, &path).unwrap();
         let reloaded = Config::load_from(&path).unwrap();
         assert!(reloaded.kimi.enabled, "key through the form opts the vendor in");
-        assert!(reloaded.kimi.accounts.iter().any(|a| a.label == "work"));
+        assert!(reloaded.kimi.accounts.iter().any(|a| a.label == "1"),
+            "the first account is named by its position");
+
+        // Any field (name included) is rejected — position is the identity,
+        // region is auto-detected.
+        let patch = r#"{"schema_version":1,"accounts":{"kimi":[
+            {"action":"update","label":"1","fields":{"name":"team"}}]}}"#;
+        assert!(apply_settings_json_to_path(&reloaded, patch, &path).is_err());
 
         let patch = r#"{"schema_version":1,"accounts":{"kimi":[
-            {"action":"update","label":"work","fields":{"name":"team"}}]}}"#;
+            {"action":"update","label":"1","api_key":{"action":"clear"}}]}}"#;
         apply_settings_json_to_path(&reloaded, patch, &path).unwrap();
         let reloaded = Config::load_from(&path).unwrap();
-        assert!(reloaded.kimi.accounts.iter().any(|a| a.label == "team"));
+        assert_eq!(reloaded.kimi.accounts[0].api_key, None);
 
         let patch = r#"{"schema_version":1,"accounts":{"kimi":[
-            {"action":"remove","label":"team"}]}}"#;
+            {"action":"remove","label":"1"}]}}"#;
         apply_settings_json_to_path(&reloaded, patch, &path).unwrap();
         let reloaded = Config::load_from(&path).unwrap();
         assert!(reloaded.kimi.accounts.is_empty());
 
-        // Naming the default moves its inline key into a named account and
-        // resets the section.
-        let mut keyed = Config::default();
-        keyed.kimi.api_key = Some("default-key".into());
-        let (_td5, path5) = temp_config(Some("[kimi]\napi_key = \"default-key\"\n"));
+        // Out-of-range positions are refused, not wrapped.
         let patch = r#"{"schema_version":1,"accounts":{"kimi":[
-            {"action":"update","label":"","fields":{"name":"main"}}]}}"#;
-        apply_settings_json_to_path(&keyed, patch, &path5).unwrap();
-        let moved = Config::load_from(&path5).unwrap();
-        assert!(moved.kimi.api_key.is_none(), "default key moved out");
-        assert!(moved
-            .kimi
-            .accounts
-            .iter()
-            .any(|a| a.label == "main" && a.api_key.as_deref() == Some("default-key")));
-        // A default without an inline key (CLI login / env) cannot be named.
-        let mut bare_login = Config::default();
-        bare_login.kimi.accounts = Vec::new();
-        let (_td6, path6) = temp_config(None);
-        let patch = r#"{"schema_version":1,"accounts":{"kimi":[
-            {"action":"update","label":"","fields":{"name":"nope"}}]}}"#;
-        assert!(apply_settings_json_to_path(&bare_login, patch, &path6).is_err());
+            {"action":"remove","label":"2"}]}}"#;
+        assert!(apply_settings_json_to_path(&reloaded, patch, &path).is_err());
 
-        // Fields beyond name are rejected — region is not user-editable.
+        // Fields beyond the key are rejected — region is not user-editable.
         let bad = r#"{"schema_version":1,"accounts":{"kimi":[
             {"action":"update","label":"","fields":{"region":"cn"}}]}}"#;
         let (_td2, path2) = temp_config(None);
         assert!(apply_settings_json_to_path(&Config::default(), bad, &path2).is_err());
+    }
+
+    /// Accounts are named by POSITION ("1", "2", … in config order): adds
+    /// append, and the config file carries no label at all.
+    #[test]
+    fn adds_append_and_accounts_are_named_by_position() {
+        let (_td, path) = temp_config(None);
+        let patch = r#"{"schema_version":1,"accounts":{
+            "kimi":[{"action":"add","api_key":{"action":"set","value":"k1"}}],
+            "zai":[{"action":"add","api_key":{"action":"set","value":"z1"}}]}}"#;
+        apply_settings_json_to_path(&Config::default(), patch, &path).unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        assert!(cfg.kimi.accounts.iter().any(|a| a.label == "1"));
+        assert!(cfg.zai.accounts.iter().any(|a| a.label == "1"));
+
+        // Second round: positions extend 1..n per vendor.
+        let patch = r#"{"schema_version":1,"accounts":{
+            "kimi":[{"action":"add"},{"action":"add"}],
+            "zai":[{"action":"add"}]}}"#;
+        apply_settings_json_to_path(&cfg, patch, &path).unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        let kimi_labels: Vec<&str> =
+            cfg.kimi.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(kimi_labels, vec!["1", "2", "3"], "{kimi_labels:?}");
+        let zai_labels: Vec<&str> = cfg.zai.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(zai_labels, vec!["1", "2"], "{zai_labels:?}");
+
+        // No label key is ever written — position owns the identity.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("label"), "{raw}");
+
+        // An explicit name on an add is accepted for old callers and simply
+        // ignored: both entries below land as positions 1 and 2.
+        let (_td2, path2) = temp_config(None);
+        let patch = r#"{"schema_version":1,"accounts":{
+            "zai":[{"action":"add","name":"whatever"},
+                   {"action":"add","api_key":{"action":"set","value":"k"}}]}}"#;
+        apply_settings_json_to_path(&Config::default(), patch, &path2).unwrap();
+        let cfg = Config::load_from(&path2).unwrap();
+        let zai_labels: Vec<&str> = cfg.zai.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(zai_labels, vec!["1", "2"], "{zai_labels:?}");
+    }
+
+    /// Every key-account vendor rides the same generic bridge: adds append
+    /// positionally, monthly_limit exists only for the spend vendors, and
+    /// the default section clears on removal.
+    #[test]
+    fn key_account_vendors_round_trip_through_the_generic_bridge() {
+        // Two DeepSeek keys + a default, all positional.
+        let (_td, path) = temp_config(None);
+        let patch = r#"{"schema_version":1,"accounts":{
+            "deepseek":[
+                {"action":"add","api_key":{"action":"set","value":"d1"}},
+                {"action":"add","api_key":{"action":"set","value":"d2"}}]}}"#;
+        apply_settings_json_to_path(&Config::default(), patch, &path).unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        let labels: Vec<&str> = cfg.deepseek.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(labels, vec!["1", "2"]);
+        assert!(cfg.deepseek.enabled, "a key through the form opts the vendor in");
+        // A limit on a non-spend vendor is refused.
+        let bad = r#"{"schema_version":1,"accounts":{"deepseek":[
+            {"action":"add","fields":{"monthly_limit":"100"}}]}}"#;
+        assert!(apply_settings_json_to_path(&cfg, bad, &path).is_err());
+
+        // Anthropic API accounts: key + own monthly limit per account.
+        let (_td2, path2) = temp_config(None);
+        let patch = r#"{"schema_version":1,"accounts":{
+            "anthropic_api":[
+                {"action":"add","api_key":{"action":"set","value":"admin1"},
+                 "fields":{"monthly_limit":"500"}},
+                {"action":"add","api_key":{"action":"set","value":"admin2"}}]}}"#;
+        apply_settings_json_to_path(&Config::default(), patch, &path2).unwrap();
+        let aapi_cfg = Config::load_from(&path2).unwrap();
+        let accounts = &aapi_cfg.anthropic_api.accounts;
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].monthly_limit, Some(500.0));
+        assert_eq!(accounts[1].monthly_limit, None);
+        // Clearing the limit via the field's empty string removes it.
+        let patch = r#"{"schema_version":1,"accounts":{
+            "anthropic_api":[{"action":"update","label":"1","fields":{"monthly_limit":""}}]}}"#;
+        apply_settings_json_to_path(&aapi_cfg, patch, &path2).unwrap();
+        let aapi_cfg = Config::load_from(&path2).unwrap();
+        assert_eq!(aapi_cfg.anthropic_api.accounts[0].monthly_limit, None);
+
+        // The snapshot ships every key vendor as cards, spend vendors with
+        // the limit field first and the key last.
+        let raw = settings_snapshot_json_with(&aapi_cfg, |_| false).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let aapi: Vec<&serde_json::Value> = parsed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["vendor"] == "anthropic_api")
+            .collect();
+        assert!(aapi.len() >= 2, "{}", aapi.len());
+        assert_eq!(aapi[0]["vendor_display"], "Anthropic API");
+        let ids: Vec<&str> = aapi[1]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["monthly_limit", "api_key"]);
+
+        // Removing a numbered account shifts the positions behind it.
+        let patch = r#"{"schema_version":1,"accounts":{
+            "deepseek":[{"action":"remove","label":"1"}]}}"#;
+        apply_settings_json_to_path(&cfg, patch, &path).unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        let labels: Vec<&str> = cfg.deepseek.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(labels, vec!["1"]);
+        assert_eq!(cfg.deepseek.accounts[0].api_key.as_deref(), Some("d2"));
+    }
+
+    /// A config written by an older version (labels in `[[zai.accounts]]`)
+    /// loads with positional names — the stored labels are ignored, and the
+    /// settings bridge drops them the moment it touches an entry.
+    #[test]
+    fn legacy_labels_are_ignored_and_stripped_on_touch() {        let (_td, path) = temp_config(Some(
+            "[[zai.accounts]]\nlabel = \"work\"\napi_key = \"k1\"\n\n\
+             [[zai.accounts]]\nlabel = \"team\"\napi_key = \"k2\"\n",
+        ));
+        let cfg = Config::load_from(&path).unwrap();
+        let labels: Vec<&str> = cfg.zai.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(labels, vec!["1", "2"], "positions replace stored labels");
+
+        let patch = r#"{"schema_version":1,"accounts":{"zai":[
+            {"action":"update","label":"1","api_key":{"action":"clear"}}]}}"#;
+        apply_settings_json_to_path(&cfg, patch, &path).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("label"), "touched entry lost its stale label: {raw}");
+        let reloaded = Config::load_from(&path).unwrap();
+        assert_eq!(reloaded.zai.accounts[0].api_key, None);
+        assert_eq!(reloaded.zai.accounts[1].api_key.as_deref(), Some("k2"));
     }
 
     /// The native settings form's Z.AI account list: snapshot shape, and the
@@ -2244,63 +2368,57 @@ mod tests {
         let raw = settings_snapshot_json_with(&cfg, |_| false).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let accounts = parsed["accounts"].as_array().unwrap();
-        assert_eq!(accounts.len(), 2);
+        // zai's two cards first; then the 11 key-account vendors' default
+        // cards (empty states — their Add buttons).
+        assert_eq!(accounts.len(), 13);
         assert_eq!(accounts[0]["label"], "");
         // Named accounts carry the name field first and the API key last.
         let named = &accounts[1];
-        assert_eq!(named["label"], "named");
+        assert_eq!(named["label"], "1", "the panel sees the derived positional name");
         let ids: Vec<&str> = named["fields"]
             .as_array()
             .unwrap()
             .iter()
             .map(|f| f["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, vec!["name", "account_type", "api_key"]);
-        assert_eq!(named["fields"][0]["value"], "named");
+        assert_eq!(ids, vec!["account_type", "api_key"],
+            "no name field — the position is the name");
 
         let (_td, path) = temp_config(None);
         // Apply writes mutations, not snapshots: start from a config whose
-        // account list is empty (the fixture's "named" lived only in memory
-        // for the snapshot assertions above).
+        // account list is empty (the fixture above lived only in memory
+        // for the snapshot assertions).
         let mut apply_cfg = Config::default();
         apply_cfg.zai.api_key = Some("default-key".into());
         let patch = r#"{"schema_version":1,"accounts":{"zai":[
-            {"action":"add","name":"team",
+            {"action":"add",
              "fields":{"site":"cn","account_type":"team",
                        "organization_id":"org-1","project_id":"proj-1"},
              "api_key":{"action":"set","value":"team-key"}},
-            {"action":"add","name":"old",
+            {"action":"add",
              "api_key":{"action":"set","value":"old-key"}}]}}"#;
         apply_settings_json_to_path(&apply_cfg, patch, &path).unwrap();
         let reloaded = Config::load_from(&path).unwrap();
-        assert!(reloaded.zai.accounts.iter().any(|a| a.label == "team"));
-        assert!(reloaded.zai.accounts.iter().any(|a| a.label == "old"));
-        let team = reloaded
-            .zai
-            .accounts
-            .iter()
-            .find(|a| a.label == "team")
-            .unwrap();
+        let labels: Vec<&str> = reloaded.zai.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(labels, vec!["1", "2"]);
+        let team = &reloaded.zai.accounts[0];
         assert_eq!(team.account_type, crate::config::ZaiAccountType::Team);
         assert_eq!(team.site, Some(crate::config::ZaiSite::Cn));
         assert_eq!(team.organization_id.as_deref(), Some("org-1"));
         assert_eq!(team.api_key.as_deref(), Some("team-key"));
         assert!(reloaded.zai.enabled, "a key through the form opts the vendor in");
 
-        // Rename + switch it to usage: ids disappear, defaults by removal.
+        // Switch account 1 to usage by position: ids disappear, defaults by
+        // removal, and the label stays "1".
         let patch = r#"{"schema_version":1,"accounts":{"zai":[
-            {"action":"update","label":"team",
-             "fields":{"name":"payg","account_type":"usage","site":""}}]}}"#;
+            {"action":"update","label":"1",
+             "fields":{"account_type":"usage","site":""}}]}}"#;
         apply_settings_json_to_path(&reloaded, patch, &path).unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(!raw.contains("organization_id"), "{raw}");
         let reloaded = Config::load_from(&path).unwrap();
-        let payg = reloaded
-            .zai
-            .accounts
-            .iter()
-            .find(|a| a.label == "payg")
-            .unwrap();
+        let payg = &reloaded.zai.accounts[0];
+        assert_eq!(payg.label, "1");
         assert_eq!(payg.account_type, crate::config::ZaiAccountType::Usage);
         assert_eq!(payg.site, None);
 
@@ -2311,38 +2429,36 @@ mod tests {
         bare.zai.accounts = reloaded.zai.accounts.clone();
         let raw = settings_snapshot_json_with(&bare, |_| false).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let labels: Vec<&str> = parsed["accounts"]
+        let zai_labels: Vec<&str> = parsed["accounts"]
             .as_array()
             .unwrap()
             .iter()
+            .filter(|a| a["vendor"] == "zai")
             .map(|a| a["label"].as_str().unwrap())
             .collect();
-        assert!(!labels.contains(&""), "{labels:?}");
+        assert_eq!(zai_labels, vec!["1", "2"], "no zai default row: {zai_labels:?}");
 
-        // Remove + re-add the same name in ONE save works (the running label
-        // set follows the mutations, not the stale loaded config).
+        // Remove + re-add in ONE save works: positions follow the mutations
+        // in order (add → 1, remove 1, add → 1 again).
         let (_td3, path3) = temp_config(None);
         let patch = r#"{"schema_version":1,"accounts":{"zai":[
-            {"action":"add","name":"recycled","api_key":{"action":"set","value":"k1"}},
-            {"action":"remove","label":"recycled"},
-            {"action":"add","name":"recycled","api_key":{"action":"set","value":"k2"}}]}}"#;
+            {"action":"add","api_key":{"action":"set","value":"k1"}},
+            {"action":"remove","label":"1"},
+            {"action":"add","api_key":{"action":"set","value":"k2"}}]}}"#;
         apply_settings_json_to_path(&Config::default(), patch, &path3).unwrap();
         let recycled = Config::load_from(&path3).unwrap();
-        assert_eq!(
-            recycled
-                .zai
-                .accounts
-                .iter()
-                .filter(|a| a.label == "recycled")
-                .count(),
-            1
-        );
-        // Duplicate adds in one request are still rejected.
+        assert_eq!(recycled.zai.accounts.len(), 1);
+        assert_eq!(recycled.zai.accounts[0].label, "1");
+        assert_eq!(recycled.zai.accounts[0].api_key.as_deref(), Some("k2"));
+        // Two plain adds in one request are fine now — no names to collide.
         let dup = r#"{"schema_version":1,"accounts":{"zai":[
-            {"action":"add","name":"twice"},
-            {"action":"add","name":"twice"}]}}"#;
+            {"action":"add"},
+            {"action":"add"}]}}"#;
         let (_td4, path4) = temp_config(None);
-        assert!(apply_settings_json_to_path(&Config::default(), dup, &path4).is_err());
+        apply_settings_json_to_path(&Config::default(), dup, &path4).unwrap();
+        let two = Config::load_from(&path4).unwrap();
+        let labels: Vec<&str> = two.zai.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(labels, vec!["1", "2"]);
 
         // Removing the default resets the section: key + billing fields go.
         let mut with_default = bare.clone();
@@ -2360,14 +2476,14 @@ mod tests {
         let patch = r#"{"schema_version":1,"accounts":{"zai":[
             {"action":"update","label":"",
              "fields":{"account_type":"team","organization_id":"d-org","project_id":"d-proj"}},
-            {"action":"update","label":"old",
+            {"action":"update","label":"2",
              "api_key":{"action":"clear"}},
-            {"action":"remove","label":"old"}]}}"#;
+            {"action":"remove","label":"2"}]}}"#;
         apply_settings_json_to_path(&reloaded, patch, &path).unwrap();
         let reloaded = Config::load_from(&path).unwrap();
         assert_eq!(reloaded.zai.account_type, crate::config::ZaiAccountType::Team);
         assert_eq!(reloaded.zai.organization_id.as_deref(), Some("d-org"));
-        assert!(reloaded.zai.accounts.iter().all(|a| a.label != "old"));
+        assert_eq!(reloaded.zai.accounts.len(), 1);
     }
 
     #[test]
@@ -2901,16 +3017,14 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
 
         assert_eq!(parsed["schema_version"], 1);
         assert_eq!(parsed["primary"], "anthropic");
-        // Z.AI and Kimi are account lists now — absent from the plain key
-        // cards…
-        assert!(parsed["keys"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["id"] != "zai" && row["id"] != "kimi"));
-        // …present as the default account, key state intact, no secret.
+        // Z.AI and every key-account vendor are account lists now — absent
+        // from the plain key cards entirely…
+        assert!(parsed["keys"].as_array().unwrap().is_empty());
+        // …present as account cards: Z.AI's configured default first, then
+        // every other key vendor's empty-state default card (its Add button
+        // is the entry point when nothing is configured).
         let accounts = parsed["accounts"].as_array().unwrap();
-        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts.len(), 12, "zai + the 11 key-account vendors");
         let zai = &accounts[0];
         assert_eq!(zai["vendor"], "zai");
         assert_eq!(zai["label"], "");
@@ -2919,17 +3033,17 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         assert_eq!(zai["inline_configured"], true);
         assert_eq!(zai["environment_configured"], true);
         assert_eq!(zai["environment"], "CUSTOM_ZAI_KEY");
-        // Form order: site, account type, (team ids), API key LAST; no name
-        // field for the default account.
+        assert_eq!(zai["vendor_display"], "Z.AI");
+        // Form order: account type, (team ids), API key LAST; no name field
+        // anymore — the bar tags accounts with the provider logo.
         let ids: Vec<&str> = zai["fields"]
             .as_array()
             .unwrap()
             .iter()
             .map(|f| f["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, vec!["name", "account_type", "api_key"],
-            "an inline default key is nameable (rename moves it)");
-        assert_eq!(zai["fields"][2]["kind"], "secret");
+        assert_eq!(ids, vec!["account_type", "api_key"]);
+        assert_eq!(zai["fields"][1]["kind"], "secret");
         // No site field — it is auto-detected from the account type; the
         // config file keeps the `site` override for hand-edited edge cases.
         assert!(!raw.contains("\"site\""));

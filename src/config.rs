@@ -43,6 +43,7 @@ pub struct Config {
     pub context: ContextConfig,
     pub anthropic: AnthropicConfig,
     pub anthropic_api: AnthropicApiConfig,
+    pub openai_api: OpenaiApiConfig,
     pub openai: OpenAiConfig,
     pub zai: ZaiConfig,
     pub openrouter: OpenRouterConfig,
@@ -532,6 +533,13 @@ pub struct OpenCodeGoConfig {
     pub enabled: bool,
     pub api_key_env: String,
     pub api_key: Option<String>,
+    /// Extra keys beyond the default one (`[[vendor.accounts]]`): each entry
+    /// gets its own tab, tile, and isolated cache, auto-named by its
+    /// position ("1", "2", …). The default key keeps the singular fields.
+    pub accounts: Vec<KeyAccount>,
+    /// Whether aggregate views include the default key when numbered
+    /// accounts exist. Ignored when `accounts` is empty.
+    pub show_default_account: bool,
 }
 
 impl Default for OpenCodeGoConfig {
@@ -540,6 +548,8 @@ impl Default for OpenCodeGoConfig {
             enabled: false,
             api_key_env: "OPENCODE_GO_API_KEY".to_string(),
             api_key: None,
+            accounts: Vec::new(),
+            show_default_account: true,
         }
     }
 }
@@ -641,13 +651,13 @@ impl ZaiSite {
     }
 }
 
-/// One named Z.AI / BigModel account. The default key continues to use the
+/// One extra Z.AI / BigModel account. The default key continues to use the
 /// singular fields under `[zai]`; each entry here adds a key with its own
-/// billing type, site, and cache directory.
+/// billing type, site, and cache directory. Entries carry no label — the
+/// runtime name is the entry's 1-based position in the array.
 ///
 /// ```toml
 /// [[zai.accounts]]
-/// label = "team"
 /// api_key_env = "BIGMODEL_TEAM_KEY"
 /// account_type = "team"
 /// organization_id = "org-…"
@@ -655,7 +665,13 @@ impl ZaiSite {
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ZaiAccount {
-    /// Stable CLI/report label and account-scoped cache subdirectory.
+    /// Runtime identity, DERIVED at load: the entry's 1-based position in
+    /// `[[zai.accounts]]` ("1", "2", …) — the settings panel's top-to-bottom
+    /// order. The config file no longer carries a `label`; a hand-written
+    /// one is ignored (and dropped whenever the settings bridge touches the
+    /// entry). Positional names keep `--account`, report ids, and cache
+    /// subdirectories stable without any user configuration.
+    #[serde(skip)]
     pub label: String,
     /// Optional environment variable containing this account's key.
     #[serde(default)]
@@ -802,20 +818,6 @@ impl Default for OpenRouterConfig {
     }
 }
 
-/// One named OpenRouter account. The default account continues to use the
-/// singular `api_key_env` / `api_key` fields under `[openrouter]`.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct OpenRouterAccount {
-    /// Stable CLI/report label and account-scoped cache subdirectory.
-    pub label: String,
-    /// Optional environment variable containing this account's key.
-    #[serde(default)]
-    pub api_key_env: Option<String>,
-    /// Inline fallback when the account environment variable is unset.
-    #[serde(default)]
-    pub api_key: Option<String>,
-}
-
 impl OpenRouterConfig {
     /// Find a named account or fail loudly instead of falling back to the
     /// default key (which would show the wrong account's usage).
@@ -843,13 +845,8 @@ impl OpenRouterConfig {
         match label {
             None => resolve_api_key("OpenRouter", &self.api_key_env, self.api_key.as_deref()),
             Some(label) => {
-                let account = self.account(label)?;
-                resolve_api_key_in_section(
-                    &format!("OpenRouter account {label:?}"),
-                    "[[openrouter.accounts]]",
-                    account.api_key_env.as_deref().unwrap_or(""),
-                    account.api_key.as_deref(),
-                )
+                self.account(label)?;
+                resolve_key_account("OpenRouter", "openrouter", &self.accounts, label)
             }
         }
     }
@@ -861,6 +858,13 @@ pub struct DeepseekConfig {
     pub enabled: bool,
     pub api_key_env: String,
     pub api_key: Option<String>,
+    /// Extra keys beyond the default one (`[[vendor.accounts]]`): each entry
+    /// gets its own tab, tile, and isolated cache, auto-named by its
+    /// position ("1", "2", …). The default key keeps the singular fields.
+    pub accounts: Vec<KeyAccount>,
+    /// Whether aggregate views include the default key when numbered
+    /// accounts exist. Ignored when `accounts` is empty.
+    pub show_default_account: bool,
 }
 
 impl Default for DeepseekConfig {
@@ -869,6 +873,8 @@ impl Default for DeepseekConfig {
             enabled: false,
             api_key_env: "DEEPSEEK_API_KEY".to_string(),
             api_key: None,
+            accounts: Vec::new(),
+            show_default_account: true,
         }
     }
 }
@@ -914,19 +920,33 @@ impl Default for KimiConfig {
     }
 }
 
-/// One named Kimi account (`[[kimi.accounts]]`). Each entry reports its own
-/// weekly + 5h subscription quota with an isolated cache.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct KimiAccount {
-    /// Stable CLI/report label and account-scoped cache subdirectory.
+/// One extra API-key account for every key-based vendor
+/// (`[[kimi.accounts]]`, `[[openrouter.accounts]]`, `[[deepseek.accounts]]`,
+/// …). The runtime name is DERIVED at load: the entry's 1-based position in
+/// its array ("1", "2", … — the settings panel's top-to-bottom order); the
+/// config file carries no labels. `monthly_limit` exists only for the
+/// spend-monitoring vendors (`anthropic_api`, `openai_api`) — each account
+/// is its own organization with its own budget; the other vendors never
+/// write it.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct KeyAccount {
+    #[serde(skip)]
     pub label: String,
-    /// Optional environment variable containing this account's key.
     #[serde(default)]
     pub api_key_env: Option<String>,
-    /// Inline fallback when the account environment variable is unset.
     #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub monthly_limit: Option<f64>,
 }
+
+/// One named Kimi account (`[[kimi.accounts]]`). Each entry reports its own
+/// weekly + 5h subscription quota with an isolated cache.
+pub type KimiAccount = KeyAccount;
+
+/// One named OpenRouter account. The default account continues to use the
+/// singular `api_key_env` / `api_key` fields under `[openrouter]`.
+pub type OpenRouterAccount = KeyAccount;
 
 impl KimiConfig {
     /// Find a named account or fail loudly instead of falling back to the
@@ -951,13 +971,8 @@ impl KimiConfig {
     /// Resolve the API key of one named account. Accounts are key-based: the
     /// Kimi Code CLI login is a single account and cannot back a named entry.
     pub fn resolve_account_key(&self, label: &str) -> Result<String> {
-        let account = self.account(label)?;
-        resolve_api_key_in_section(
-            &format!("Kimi account {label:?}"),
-            "[[kimi.accounts]]",
-            account.api_key_env.as_deref().unwrap_or(""),
-            account.api_key.as_deref(),
-        )
+        self.account(label)?;
+        resolve_key_account("Kimi", "kimi", &self.accounts, label)
     }
 }
 
@@ -970,6 +985,13 @@ pub struct KiloConfig {
     /// Optional Kilo organization id — scopes the balance to a team via the
     /// `x-kilocode-organizationid` header. Omit for the personal balance.
     pub organization_id: Option<String>,
+    /// Extra keys beyond the default one (`[[vendor.accounts]]`): each entry
+    /// gets its own tab, tile, and isolated cache, auto-named by its
+    /// position ("1", "2", …). The default key keeps the singular fields.
+    pub accounts: Vec<KeyAccount>,
+    /// Whether aggregate views include the default key when numbered
+    /// accounts exist. Ignored when `accounts` is empty.
+    pub show_default_account: bool,
 }
 
 impl Default for KiloConfig {
@@ -981,6 +1003,8 @@ impl Default for KiloConfig {
             api_key_env: "KILO_API_KEY".to_string(),
             api_key: None,
             organization_id: None,
+            accounts: Vec::new(),
+            show_default_account: true,
         }
     }
 }
@@ -991,6 +1015,13 @@ pub struct NovitaConfig {
     pub enabled: bool,
     pub api_key_env: String,
     pub api_key: Option<String>,
+    /// Extra keys beyond the default one (`[[vendor.accounts]]`): each entry
+    /// gets its own tab, tile, and isolated cache, auto-named by its
+    /// position ("1", "2", …). The default key keeps the singular fields.
+    pub accounts: Vec<KeyAccount>,
+    /// Whether aggregate views include the default key when numbered
+    /// accounts exist. Ignored when `accounts` is empty.
+    pub show_default_account: bool,
 }
 
 impl Default for NovitaConfig {
@@ -1000,6 +1031,8 @@ impl Default for NovitaConfig {
             enabled: false,
             api_key_env: "NOVITA_API_KEY".to_string(),
             api_key: None,
+            accounts: Vec::new(),
+            show_default_account: true,
         }
     }
 }
@@ -1016,6 +1049,13 @@ pub struct MinimaxConfig {
     /// host is rejected by the other (`status_code 2049`), so pointing this at
     /// the wrong region reads as an invalid key rather than an empty plan.
     pub region: String,
+    /// Extra keys beyond the default one (`[[vendor.accounts]]`): each entry
+    /// gets its own tab, tile, and isolated cache, auto-named by its
+    /// position ("1", "2", …). The default key keeps the singular fields.
+    pub accounts: Vec<KeyAccount>,
+    /// Whether aggregate views include the default key when numbered
+    /// accounts exist. Ignored when `accounts` is empty.
+    pub show_default_account: bool,
 }
 
 impl Default for MinimaxConfig {
@@ -1026,6 +1066,8 @@ impl Default for MinimaxConfig {
             api_key_env: "MINIMAX_API_KEY".to_string(),
             api_key: None,
             region: "global".to_string(),
+            accounts: Vec::new(),
+            show_default_account: true,
         }
     }
 }
@@ -1038,6 +1080,13 @@ pub struct MoonshotConfig {
     pub api_key: Option<String>,
     /// `"global"` → api.moonshot.ai (USD); `"cn"` → api.moonshot.cn (CNY).
     pub region: String,
+    /// Extra keys beyond the default one (`[[vendor.accounts]]`): each entry
+    /// gets its own tab, tile, and isolated cache, auto-named by its
+    /// position ("1", "2", …). The default key keeps the singular fields.
+    pub accounts: Vec<KeyAccount>,
+    /// Whether aggregate views include the default key when numbered
+    /// accounts exist. Ignored when `accounts` is empty.
+    pub show_default_account: bool,
 }
 
 impl Default for MoonshotConfig {
@@ -1048,6 +1097,8 @@ impl Default for MoonshotConfig {
             api_key_env: "MOONSHOT_API_KEY".to_string(),
             api_key: None,
             region: "global".to_string(),
+            accounts: Vec::new(),
+            show_default_account: true,
         }
     }
 }
@@ -1062,6 +1113,13 @@ pub struct GrokConfig {
     /// Optional team id. When absent, it's auto-resolved from the management
     /// key via `/auth/management-keys/validation`.
     pub team_id: Option<String>,
+    /// Extra keys beyond the default one (`[[vendor.accounts]]`): each entry
+    /// gets its own tab, tile, and isolated cache, auto-named by its
+    /// position ("1", "2", …). The default key keeps the singular fields.
+    pub accounts: Vec<KeyAccount>,
+    /// Whether aggregate views include the default key when numbered
+    /// accounts exist. Ignored when `accounts` is empty.
+    pub show_default_account: bool,
 }
 
 impl Default for GrokConfig {
@@ -1072,6 +1130,8 @@ impl Default for GrokConfig {
             api_key_env: "XAI_MANAGEMENT_KEY".to_string(),
             api_key: None,
             team_id: None,
+            accounts: Vec::new(),
+            show_default_account: true,
         }
     }
 }
@@ -1180,6 +1240,13 @@ pub struct AnthropicApiConfig {
     /// Monthly USD spend limit, used only for the spend-vs-limit % display. The
     /// API exposes neither this limit nor the remaining prepaid balance.
     pub monthly_limit: Option<f64>,
+    /// Extra keys beyond the default one (`[[vendor.accounts]]`): each entry
+    /// gets its own tab, tile, and isolated cache, auto-named by its
+    /// position ("1", "2", …). The default key keeps the singular fields.
+    pub accounts: Vec<KeyAccount>,
+    /// Whether aggregate views include the default key when numbered
+    /// accounts exist. Ignored when `accounts` is empty.
+    pub show_default_account: bool,
 }
 
 impl Default for AnthropicApiConfig {
@@ -1190,6 +1257,40 @@ impl Default for AnthropicApiConfig {
             api_key_env: "ANTHROPIC_ADMIN_KEY".to_string(),
             api_key: None,
             monthly_limit: None,
+            accounts: Vec::new(),
+            show_default_account: true,
+        }
+    }
+}
+
+/// OpenAI Admin API — trailing-30-day spend from the Costs API over a
+/// platform **Admin key** (regular project `sk-` keys are rejected by the
+/// organization endpoints). There is no balance endpoint: spend against an
+/// optional monthly limit is the whole display, mirroring
+/// [`AnthropicApiConfig`].
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct OpenaiApiConfig {
+    pub enabled: bool,
+    /// Env var for the platform **Admin key** (organization settings).
+    pub api_key_env: String,
+    pub api_key: Option<String>,
+    /// Monthly USD spend limit, used only for the spend-vs-limit % display.
+    pub monthly_limit: Option<f64>,
+    pub accounts: Vec<KeyAccount>,
+    pub show_default_account: bool,
+}
+
+impl Default for OpenaiApiConfig {
+    fn default() -> Self {
+        // Opt-in: needs an explicit Admin key.
+        Self {
+            enabled: false,
+            api_key_env: "OPENAI_ADMIN_KEY".to_string(),
+            api_key: None,
+            monthly_limit: None,
+            accounts: Vec::new(),
+            show_default_account: true,
         }
     }
 }
@@ -1221,13 +1322,38 @@ pub fn optional_api_key(env_var_name: &str, inline: Option<&str>) -> Option<Stri
     inline.filter(|v| !v.is_empty()).map(str::to_string)
 }
 
+/// Resolve the key of one numbered `[[vendor.accounts]]` entry: its env var
+/// wins, the inline key falls back — exactly the semantics of every vendor's
+/// default section, so all key vendors behave identically. `accounts` must
+/// be label-derived (post `derive_account_labels`).
+pub(crate) fn resolve_key_account(
+    vendor_display: &str,
+    section: &str,
+    accounts: &[KeyAccount],
+    account: &str,
+) -> Result<String> {
+    let entry = accounts
+        .iter()
+        .find(|candidate| candidate.label == account)
+        .ok_or_else(|| {
+            AppError::Credentials(format!(
+                "{vendor_display} account {account:?} not found in [[{section}.accounts]]"
+            ))
+        })?;
+    resolve_api_key_in_section(
+        &format!("{vendor_display} account {account:?}"),
+        &format!("[[{section}.accounts]]"),
+        entry.api_key_env.as_deref().unwrap_or(""),
+        entry.api_key.as_deref(),
+    )
+}
+
 fn resolve_api_key_in_section(
     vendor_label: &str,
     section: &str,
     env_var_name: &str,
     inline: Option<&str>,
-) -> crate::error::Result<String> {
-    if let Some(key) = optional_api_key(env_var_name, inline) {
+) -> crate::error::Result<String> {    if let Some(key) = optional_api_key(env_var_name, inline) {
         return Ok(key);
     }
     let valid_env_name = is_valid_env_var_name(env_var_name);
@@ -1288,6 +1414,7 @@ impl Config {
                 // literally, so a documented `credentials_path = "~/..."`
                 // silently pointed at a directory named `~`.
                 config.expand_paths();
+                config.derive_account_labels();
                 config.validate()?;
                 #[cfg(unix)]
                 config.protect_inline_api_keys(path)?;
@@ -1295,6 +1422,89 @@ impl Config {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(AppError::io_at(path, e)),
+        }
+    }
+
+    /// Name Z.AI and every key-based vendor's accounts by POSITION ("1",
+    /// "2", … in config = settings-panel order). The config files carry no
+    /// labels; these derived names are the runtime identity for `--account`,
+    /// report ids, cache subdirectories, and settings addressing. Anthropic
+    /// and OpenAI (Codex) accounts keep their explicit labels — theirs come
+    /// from external login directories and carry meaning a position cannot.
+    pub(crate) fn derive_account_labels(&mut self) {
+        for (index, account) in self.zai.accounts.iter_mut().enumerate() {
+            account.label = (index + 1).to_string();
+        }
+        let mut sections: [Vec<KeyAccount>; 11] = [
+            std::mem::take(&mut self.kimi.accounts),
+            std::mem::take(&mut self.openrouter.accounts),
+            std::mem::take(&mut self.deepseek.accounts),
+            std::mem::take(&mut self.kilo.accounts),
+            std::mem::take(&mut self.novita.accounts),
+            std::mem::take(&mut self.moonshot.accounts),
+            std::mem::take(&mut self.grok.accounts),
+            std::mem::take(&mut self.minimax.accounts),
+            std::mem::take(&mut self.opencode_go.accounts),
+            std::mem::take(&mut self.anthropic_api.accounts),
+            std::mem::take(&mut self.openai_api.accounts),
+        ];
+        for accounts in &mut sections {
+            for (index, account) in accounts.iter_mut().enumerate() {
+                account.label = (index + 1).to_string();
+            }
+        }
+        let [kimi, openrouter, deepseek, kilo, novita, moonshot, grok, minimax, opencode_go, anthropic_api, openai_api] =
+            sections;
+        self.kimi.accounts = kimi;
+        self.openrouter.accounts = openrouter;
+        self.deepseek.accounts = deepseek;
+        self.kilo.accounts = kilo;
+        self.novita.accounts = novita;
+        self.moonshot.accounts = moonshot;
+        self.grok.accounts = grok;
+        self.minimax.accounts = minimax;
+        self.opencode_go.accounts = opencode_go;
+        self.anthropic_api.accounts = anthropic_api;
+        self.openai_api.accounts = openai_api;
+    }
+
+    /// The numbered `[[vendor.accounts]]` entries of every key-based vendor
+    /// (labels already derived). `None` for vendors whose accounts are not
+    /// key-based (zai has its own shape; anthropic/openai are OAuth paths).
+    pub(crate) fn key_accounts(&self, vendor: crate::vendor::VendorId) -> Option<&[KeyAccount]> {
+        let accounts = match vendor {
+            crate::vendor::VendorId::Kimi => &self.kimi.accounts,
+            crate::vendor::VendorId::Openrouter => &self.openrouter.accounts,
+            crate::vendor::VendorId::Deepseek => &self.deepseek.accounts,
+            crate::vendor::VendorId::Kilo => &self.kilo.accounts,
+            crate::vendor::VendorId::Novita => &self.novita.accounts,
+            crate::vendor::VendorId::Moonshot => &self.moonshot.accounts,
+            crate::vendor::VendorId::Grok => &self.grok.accounts,
+            crate::vendor::VendorId::Minimax => &self.minimax.accounts,
+            crate::vendor::VendorId::OpenCodeGo => &self.opencode_go.accounts,
+            crate::vendor::VendorId::AnthropicApi => &self.anthropic_api.accounts,
+            crate::vendor::VendorId::OpenaiApi => &self.openai_api.accounts,
+            _ => return None,
+        };
+        Some(accounts)
+    }
+
+    /// Whether a vendor's aggregate views include its default key when
+    /// numbered accounts exist (the kimi rule).
+    pub(crate) fn key_show_default(&self, vendor: crate::vendor::VendorId) -> bool {
+        match vendor {
+            crate::vendor::VendorId::Kimi => self.kimi.show_default_account,
+            crate::vendor::VendorId::Openrouter => self.openrouter.show_default_account,
+            crate::vendor::VendorId::Deepseek => self.deepseek.show_default_account,
+            crate::vendor::VendorId::Kilo => self.kilo.show_default_account,
+            crate::vendor::VendorId::Novita => self.novita.show_default_account,
+            crate::vendor::VendorId::Moonshot => self.moonshot.show_default_account,
+            crate::vendor::VendorId::Grok => self.grok.show_default_account,
+            crate::vendor::VendorId::Minimax => self.minimax.show_default_account,
+            crate::vendor::VendorId::OpenCodeGo => self.opencode_go.show_default_account,
+            crate::vendor::VendorId::AnthropicApi => self.anthropic_api.show_default_account,
+            crate::vendor::VendorId::OpenaiApi => self.openai_api.show_default_account,
+            _ => true,
         }
     }
 
@@ -1331,14 +1541,30 @@ impl Config {
             self.moonshot.api_key.as_deref(),
             self.grok.api_key.as_deref(),
             self.anthropic_api.api_key.as_deref(),
+            self.openai_api.api_key.as_deref(),
             self.opencode_go.api_key.as_deref(),
         ]
         .into_iter()
+        // Every numbered account's inline key gets the same protection as
+        // its section's default key — a `[[deepseek.accounts]]` entry is as
+        // much a secret as `[deepseek] api_key`. Adding a key-account vendor
+        // without listing it here is how a leak slips through.
         .chain(
-            self.openrouter
-                .accounts
-                .iter()
-                .map(|account| account.api_key.as_deref()),
+            [
+                &self.kimi.accounts,
+                &self.openrouter.accounts,
+                &self.deepseek.accounts,
+                &self.kilo.accounts,
+                &self.novita.accounts,
+                &self.moonshot.accounts,
+                &self.grok.accounts,
+                &self.minimax.accounts,
+                &self.opencode_go.accounts,
+                &self.anthropic_api.accounts,
+            ]
+            .into_iter()
+            .flatten()
+            .map(|account| account.api_key.as_deref()),
         )
         .any(|key| key.is_some_and(|key| !key.is_empty()))
     }
@@ -1385,6 +1611,7 @@ impl Config {
             VendorId::Minimax => self.minimax.enabled,
             VendorId::Kiro => self.kiro.enabled,
             VendorId::OpenCodeGo => self.opencode_go.enabled,
+            VendorId::OpenaiApi => self.openai_api.enabled,
         }
     }
 
@@ -1457,26 +1684,38 @@ impl Config {
                 )));
             }
         }
-        let mut openrouter_labels = HashSet::new();
-        for account in &self.openrouter.accounts {
-            validate_account_label_for("openrouter", &account.label)?;
-            if !openrouter_labels.insert(&account.label) {
-                return Err(AppError::Credentials(format!(
-                    "duplicate openrouter account label {:?}",
+        // Key-account vendors carry no label constraints (labels are
+        // positional, derived at load) and no key-presence requirement at
+        // load — a keyless account simply reads as the calm "not configured
+        // yet" state at fetch time. Spend limits are the one hard rule:
+        // they feed arithmetic that NaN/zero would poison.
+        for account in &self.anthropic_api.accounts {
+            if let Some(limit) = account.monthly_limit
+                && (!limit.is_finite() || limit <= 0.0)
+            {
+                return Err(AppError::Other(format!(
+                    "[anthropic_api] account {} monthly_limit must be finite and greater \
+                     than zero; remove it to show spend without a limit",
                     account.label
                 )));
             }
-            let has_env = account
-                .api_key_env
-                .as_deref()
-                .is_some_and(|name| !name.is_empty());
-            let has_inline = account
-                .api_key
-                .as_deref()
-                .is_some_and(|key| !key.is_empty());
-            if !has_env && !has_inline {
-                return Err(AppError::Credentials(format!(
-                    "openrouter account {:?} must set api_key_env or api_key",
+        }
+        if let Some(limit) = self.openai_api.monthly_limit
+            && (!limit.is_finite() || limit <= 0.0)
+        {
+            return Err(AppError::Other(
+                "[openai_api] monthly_limit must be finite and greater than zero; \
+                 remove it to show spend without a limit"
+                    .into(),
+            ));
+        }
+        for account in &self.openai_api.accounts {
+            if let Some(limit) = account.monthly_limit
+                && (!limit.is_finite() || limit <= 0.0)
+            {
+                return Err(AppError::Other(format!(
+                    "[openai_api] account {} monthly_limit must be finite and greater \
+                     than zero; remove it to show spend without a limit",
                     account.label
                 )));
             }
@@ -1722,6 +1961,66 @@ mod tests {
         f
     }
 
+    /// Z.AI and Kimi accounts are named by POSITION on load ("1", "2", … —
+    /// the settings panel's top-to-bottom order); the config file carries no
+    /// labels, and a legacy hand-written label is ignored. Anthropic and
+    /// OpenRouter labels are external identities and stay verbatim.
+    #[test]
+    fn zai_and_kimi_accounts_are_named_by_position() {
+        let file = write_toml(
+            r#"
+            [[zai.accounts]]
+            label = "work"
+            api_key = "k1"
+
+            [[zai.accounts]]
+            api_key = "k2"
+
+            [[kimi.accounts]]
+            label = "legacy"
+            api_key = "k3"
+            "#,
+        );
+        let cfg = Config::load_from(file.path()).unwrap();
+        let zai: Vec<&str> = cfg.zai.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(zai, vec!["1", "2"], "positions replace stored labels");
+        let kimi: Vec<&str> = cfg.kimi.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(kimi, vec!["1"]);
+
+        // The derived names address accounts everywhere the runtime does.
+        assert_eq!(cfg.zai.account("2").unwrap().api_key.as_deref(), Some("k2"));
+        assert!(cfg.zai.account("work").is_err(), "legacy labels no longer address");
+        assert!(cfg.zai.account("3").is_err(), "out-of-range position refused");
+    }
+
+    /// A label-less TOML parse (no load_from normalization) leaves labels
+    /// empty — derive_account_labels is what names them, so direct parses
+    /// (settings snapshot) call it too.
+    #[test]
+    fn derive_account_labels_numbers_only_zai_and_kimi() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [[zai.accounts]]
+            api_key = "k1"
+
+            [[zai.accounts]]
+            api_key = "k2"
+
+            [[anthropic.accounts]]
+            label = "work"
+            credentials_path = "/tmp/c.json"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.zai.accounts.iter().all(|a| a.label.is_empty()));
+        cfg.derive_account_labels();
+        let zai: Vec<&str> = cfg.zai.accounts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(zai, vec!["1", "2"]);
+        // Anthropic labels are external identities (login directories) —
+        // never renumbered.
+        assert_eq!(cfg.anthropic.accounts[0].label, "work");
+    }
+
     /// The back-compat guarantee #134 asks for: a config with no
     /// `[[openai.accounts]]` resolves exactly what it resolved before, whether
     /// it sets `codex_auth_path` or leaves it to the default.
@@ -1838,6 +2137,7 @@ mod tests {
             label: "work".into(),
             api_key_env: None,
             api_key: Some("<redacted>".into()),
+            monthly_limit: None,
         });
         assert!(config.has_inline_api_keys());
     }
@@ -2295,7 +2595,6 @@ enabled = false
             api_key_env = "OPENROUTER_WORK_API_KEY"
 
             [[openrouter.accounts]]
-            label = "personal"
             api_key = "personal-inline"
             "#,
         );
@@ -2308,14 +2607,31 @@ enabled = false
             config.openrouter.resolve_api_key(None).unwrap(),
             "default-inline"
         );
+        // Positional addressing: the hand-written "work" label is ignored,
+        // "1"/"2" address the entries in file order.
+        let missing = config
+            .openrouter
+            .resolve_api_key(Some("1"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            missing.contains("OpenRouter account \"1\"") && missing.contains("no API key"),
+            "{missing}"
+        );
+        assert!(!missing.contains("personal-inline"));
         assert_eq!(
-            config.openrouter.resolve_api_key(Some("personal")).unwrap(),
+            config.openrouter.resolve_api_key(Some("2")).unwrap(),
             "personal-inline"
         );
+        assert!(config.openrouter.account("work").is_err(), "legacy labels no longer address");
     }
 
     #[test]
     fn openrouter_named_accounts_reject_ambiguous_or_unsafe_labels() {
+        // Positional naming removed every label hazard: duplicates, path
+        // separators, and keyless entries all LOAD now — the position owns
+        // the identity, and a keyless account simply reads as not
+        // configured at fetch time (the calm state, like every vendor).
         for source in [
             r#"
             [[openrouter.accounts]]
@@ -2332,11 +2648,17 @@ enabled = false
             "#,
             r#"
             [[openrouter.accounts]]
-            label = "work"
             "#,
         ] {
             let f = write_toml(source);
-            assert!(Config::load_from(f.path()).is_err(), "accepted {source}");
+            let config = Config::load_from(f.path()).unwrap();
+            for account in &config.openrouter.accounts {
+                assert!(
+                    !account.label.contains('/') && !account.label.is_empty(),
+                    "derived labels are safe positions: {:?}",
+                    account.label
+                );
+            }
         }
     }
 
@@ -2350,6 +2672,7 @@ enabled = false
             label: "work".into(),
             api_key_env: None,
             api_key: Some("work-secret".into()),
+            monthly_limit: None,
         });
         let message = config
             .resolve_api_key(Some("missing"))
@@ -2367,6 +2690,7 @@ enabled = false
                 label: "work".into(),
                 api_key_env: Some("sk_pasted_secret".into()),
                 api_key: None,
+                monthly_limit: None,
             }],
             ..OpenRouterConfig::default()
         };
@@ -2962,10 +3286,10 @@ enabled = false
             "admin_key_env must stay commented out while it is inert: {live:?}"
         );
         // Still documented, though — silently dropping it would leave users
-        // who already set it with no explanation of why it does nothing.
+        // who already set it with no explanation of where that job moved.
         assert!(
-            text.contains("admin_key_env") && text.contains("RESERVED"),
-            "the example should keep describing admin_key_env as reserved"
+            text.contains("admin_key_env") && text.contains("[openai_api]"),
+            "the example should keep pointing admin_key_env readers at [openai_api]"
         );
     }
 

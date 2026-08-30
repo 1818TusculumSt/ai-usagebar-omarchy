@@ -155,6 +155,13 @@ pub fn compact_cells(snapshot: &VendorSnapshot) -> (String, Vec<(String, PaceSev
             };
             (String::new(), vec![cell])
         }
+        VendorSnapshot::OpenaiApi(s) => {
+            let cell = match s.pct() {
+                Some(p) => pct("spend", p),
+                None => (format!("{}/30d", usd(s.spent)), PaceSeverity::Low),
+            };
+            (String::new(), vec![cell])
+        }
         VendorSnapshot::Openai(s) => {
             let mut cells = Vec::new();
             if let Some(w) = &s.session {
@@ -247,6 +254,7 @@ pub fn headline_pct(snapshot: &VendorSnapshot) -> Option<i32> {
         .flatten()
         .max(),
         VendorSnapshot::AnthropicApi(s) => s.pct(),
+        VendorSnapshot::OpenaiApi(s) => s.pct(),
         VendorSnapshot::Openai(s) => [
             s.session.as_ref().map(|w| w.utilization_pct),
             s.weekly.as_ref().map(|w| w.utilization_pct),
@@ -333,6 +341,7 @@ pub(crate) fn sections_with_metadata_for(
             let mut sections = match snapshot {
                 VendorSnapshot::Anthropic(s) => anthropic_sections(s, now, pace_tolerance),
                 VendorSnapshot::AnthropicApi(s) => anthropic_api_sections(s),
+                VendorSnapshot::OpenaiApi(s) => openai_api_sections(s),
                 VendorSnapshot::Openai(s) => openai_sections(s, now, pace_tolerance),
                 VendorSnapshot::Zai(s) => zai_sections(s, now),
                 VendorSnapshot::Openrouter(s) => openrouter_sections(s),
@@ -485,6 +494,60 @@ fn anthropic_api_sections(s: &crate::usage::AnthropicApiSnapshot) -> SectionBuil
     v.push(Section::Text {
         label: "".into(),
         value: "Excludes Priority Tier cost (not reported by this API).".into(),
+    });
+    v
+}
+
+fn openai_api_sections(s: &crate::usage::OpenAiApiSnapshot) -> SectionBuilder {
+    let mut v = SectionBuilder::new(vec![Section::Title {
+        left: "OpenAI API".into(),
+        right: None,
+    }]);
+    match (s.limit.filter(|l| *l > 0.0), s.pct()) {
+        (Some(limit), Some(pct)) => {
+            let p = pct.clamp(0, 100) as u16;
+            v.push_metric(
+                Section::Metric {
+                    label: "Spend (30d)".into(),
+                    pct: p,
+                    severity: severity_for(pct),
+                    value_label: format!("{} of ${:.0}", usd(s.spent), limit),
+                    footnote: format!("{pct}% of monthly limit"),
+                },
+                None,
+            );
+        }
+        _ => {
+            v.push(Section::Text {
+                label: "Spend (30d)".into(),
+                value: usd(s.spent),
+            });
+        }
+    }
+    if !s.top_items.is_empty() {
+        v.push(Section::Spacer);
+        v.push(Section::Block {
+            label: "Top line items".into(),
+            body: s
+                .top_items
+                .iter()
+                .take(6)
+                .map(|(name, value)| format!("{name} — {}", usd(*value)))
+                .collect(),
+        });
+    }
+    v.push(Section::Spacer);
+    v.push(Section::Text {
+        label: "".into(),
+        value: "Trailing-30-day billed cost via the Costs API.".into(),
+    });
+    v.push(Section::Text {
+        label: "".into(),
+        value: "Admin API key required; project sk- keys are rejected.".into(),
+    });
+    v.push(Section::Text {
+        label: "".into(),
+        value: "Spend, not balance — the Admin API has no balance endpoint.".into(),
     });
     v
 }

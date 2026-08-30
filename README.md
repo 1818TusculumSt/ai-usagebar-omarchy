@@ -18,13 +18,17 @@ codebase.
   endpoint with `?type=2` plus organization/project headers — configure the
   billing type per key and the site (z.ai / bigmodel.cn) is auto-detected
   from it. Pay-as-you-go keys degrade to 7-day usage stats automatically.
-- **Multi-account for Z.AI and Kimi** (`[[zai.accounts]]` /
-  `[[kimi.accounts]]`): every key gets its own tile on the bar, its own TUI
-  tab, and an isolated cache — manage them in the native settings form
-  (add / rename / delete, per-card Apply) or in `config.toml`.
-- **Custom display names**: each named account tags its bar tile with the
-  name you choose (`kimi-main 42%·2h 05m 15%·2d 3h`) — no name shows the provider
-  (`kimi 37%·2d 5h`). The name is also the `--account <label>` selector.
+- **Multi-account for every key-based vendor** (`[[zai.accounts]]`,
+  `[[kimi.accounts]]`, `[[openrouter.accounts]]`, `[[deepseek.accounts]]`,
+  …): every key gets its own tile on the bar, its own TUI tab, and an
+  isolated cache — manage them in the native settings form (per-vendor
+  groups, add / delete, per-card Apply) or in `config.toml`. Accounts are
+  auto-named by their position in the list (1, 2, …): no name to configure,
+  and `--account 2` selects the second one.
+- **OpenAI platform spend** (`[openai_api]`): trailing-30-day billed
+  dollars from the Costs API over an organization Admin key — the OpenAI
+  twin of the Anthropic API vendor, with an optional monthly limit per
+  account. Regular project `sk-` keys are rejected by these endpoints.
 - **Per-figure range colors on the bar**: each window figure (5h, weekly)
   is its own Text object colored by ITS remaining band — green ≥50%,
   yellow <50%, orange <20%, red <5% — so a green 5h figure can sit beside
@@ -43,7 +47,11 @@ codebase.
 - The native Omarchy Quattro plugin is the primary frontend.
 - One bar item tiles every enabled account at once (`--vendor all` for
   Waybar; the Omarchy bar does it natively). `[ui] primary` controls the
-  initial provider in the widget and TUI.
+  initial provider in the widget and TUI. Exhausted accounts (every window
+  maxed, or a balance at zero) leave the bar until their next report shows
+  room again — the tabs and hover popup keep them.
+- Bar tiles carry each vendor's logo and compact one-unit countdowns
+  (`5.3h`, `2.3d`); tooltips and panels keep the detailed `2h 05m` form.
 - Atomic caches and file locking prevent duplicate requests from multi-monitor
   Waybar setups.
 - Network failures keep the previous data visible; HTTP errors appear in the
@@ -398,7 +406,7 @@ If you'd rather see them all at once:
 }
 ```
 
-> Why 300s? The Anthropic and OpenAI Codex endpoints are undocumented and rate-limit aggressively below ~300s. The cache TTL is 60s so multi-monitor instances coexist, but Waybar's polling interval should stay at 300s.
+> Why 300s for Waybar? The Anthropic and OpenAI Codex endpoints are undocumented and rate-limit aggressively below ~300s. The cache TTL is 60s so multi-monitor instances coexist, but Waybar's polling interval should stay at 300s. (The Omarchy panel polls every 60s by default; Claude/Codex fetches are internally throttled to a 300s cache TTL there, so the fast poll only accelerates the other vendors.)
 
 ### Multiple Codex accounts
 

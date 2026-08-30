@@ -12,6 +12,7 @@ pub mod account;
 pub mod active;
 pub mod anthropic;
 pub mod anthropic_api;
+pub mod openai_api;
 pub mod antigravity;
 pub mod cache;
 pub mod claude_desktop;

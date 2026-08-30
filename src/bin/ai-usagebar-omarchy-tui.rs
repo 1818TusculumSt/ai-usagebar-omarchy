@@ -472,11 +472,14 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) -> bool {
             app.quit = true;
             true
         }
-        KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => {
+        // Up/Down walk the vendor tabs (the requested orientation: the tab
+        // strip is a vertical list in the sidebar); Tab/BackTab and the vim
+        // chars keep working as alternates.
+        KeyCode::Tab | KeyCode::Char('l') | KeyCode::Down => {
             app.next_tab();
             false
         }
-        KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => {
+        KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Up => {
             app.prev_tab();
             false
         }

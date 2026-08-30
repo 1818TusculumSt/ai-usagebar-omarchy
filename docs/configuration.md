@@ -48,9 +48,9 @@ enabled = true
 # site = "global"           # global → api.z.ai | cn → open.bigmodel.cn
 #                           # (team/usage default to cn, personal to global)
 
-# Extra Z.AI/BigModel keys — same fields as [zai] above, plus the label.
+# Extra Z.AI/BigModel keys — same fields as [zai] above; auto-named by
+# position (1, 2, …), no label field.
 # [[zai.accounts]]
-# label = "team"
 # account_type = "team"
 # organization_id = "org-…"
 # project_id = "proj-…"
@@ -79,9 +79,9 @@ enabled = true             # disabled by default; a Kimi Code CLI login is enoug
 # region = "auto"          # auto follows ~/.kimi-code/region
 #                          # cn -> api.kimi.com | global -> api.kimi.ai
 # Extra subscriptions — API-key based (one key per subscription); the CLI
-# login stays the single default account.
+# login stays the single default account. Auto-named by position, like Z.AI.
 # [[kimi.accounts]]
-# label = "work"
+# api_key = "paste-your-key-here"
 
 [minimax]
 enabled = true             # disabled by default; enable once you add an API key
@@ -174,31 +174,47 @@ is billed one of three ways, and `account_type` says which:
 
 ```toml
 [[zai.accounts]]
-label = "team"
-
 account_type = "team"
 organization_id = "org-…"
 project_id = "proj-…"
 
 [[zai.accounts]]
-label = "payg"
-
 account_type = "usage"
 ```
 
-The label is the bar-tile tag (kimi-main 42%·2h 15%·2d) and the
-`--account <label>` selector; caches are isolated per label under
-`~/.cache/ai-usagebar-omarchy/zai/<label>`. The site
-(z.ai / bigmodel.cn) is auto-detected from the account type — team & usage
-keys query bigmodel.cn, personal keys z.ai — so no `site` is needed.
+Accounts carry no `label`: each is auto-named by its POSITION in the list
+("1", "2", … — the order the settings panel shows), which doubles as the
+`--account 2` selector; caches are isolated per account under
+`~/.cache/ai-usagebar-omarchy/zai/<n>`. The site (z.ai / bigmodel.cn) is
+auto-detected from the account type — team & usage keys query
+bigmodel.cn, personal keys z.ai — so no `site` is needed.
+
+**Every key-based vendor takes the same multi-account shape** — Z.AI,
+Kimi, OpenRouter, DeepSeek, Kilo, Novita, Moonshot, Grok, MiniMax,
+OpenCode Go, Anthropic API and OpenAI API:
+
+```toml
+[[deepseek.accounts]]
+api_key = "paste-another-key"
+
+[[anthropic_api.accounts]]
+api_key = "paste-another-admin-key"
+monthly_limit = 500      # per-account spend ceiling (spend vendors only)
+```
+
+`show_default_account = false` under a section hides its default key's
+tab once numbered accounts exist. The settings panel manages all of them
+as grouped cards with a per-vendor **Add … Account** button; OpenRouter's
+legacy hand-written labels are ignored (positional naming owns it now).
 
 ## Seeing every account at once
 
 Two ways to tile all accounts in one bar, the way the old GNOME panel did:
 
-- Omarchy Quattro panel: on by default — every configured account appears side
-  by side after the icon (`󰚩 team 42% │ kmi 18% │ cld 5%`). Toggle **Tile
-  every account in the top bar** in the panel settings to go back to the
-  single selected provider.
+- Omarchy Quattro panel: on by default — every working account appears side
+  by side, each tile led by its provider logo (`claude 42% 5.3h │ kimi 18% 1d`);
+  there is no module icon in front of the tiles. Toggle **Tile every account
+  in the top bar** off for the opposite minimalism: the robot icon alone,
+  with the numbers one hover or click away.
 - Waybar: run the widget with `--vendor all` for the same tiling, with a
   combined hover tooltip covering every account.

@@ -15,6 +15,7 @@ Column {
   property color urgent: Color.urgent
   property string fontFamily: Style.font.family
   property bool showRemaining: false
+  property bool barTiled: true
   readonly property color dim: Qt.darker(foreground, 1.45)
 
   property var snapshot: ({ primary_choices: [], keys: [], accounts: [] })
@@ -39,6 +40,7 @@ Column {
   signal saved()
   signal fallbackRequested()
   signal showRemainingRequested(bool enabled)
+  signal barTiledRequested(bool enabled)
   signal closeRequested()
 
   spacing: Style.space(12)
@@ -87,21 +89,12 @@ Column {
   // path below — hiding keeps everything for the copy-paste round-trip.
   function discard() {
     scrubSecrets()
-    draftCount = 0
   }
 
+  // Plain key-card changes are gone with the API KEYS section (every key
+  // vendor is an account card now); the patch's `keys` channel stays empty.
   function collectChanges() {
-    var changes = []
-    for (var i = 0; i < keyRepeater.count; i++) {
-      var row = keyRepeater.itemAt(i)
-      if (!row || row.pendingAction === "unchanged") continue
-      changes.push({
-        id: row.vendorId,
-        action: row.pendingAction,
-        value: row.pendingAction === "set" ? row.secretText : ""
-      })
-    }
-    return changes
+    return []
   }
 
   function save() {
@@ -125,74 +118,99 @@ Column {
   // the pending forms. Only rows that actually changed are sent.
   function collectAccountChanges() {
     var changes = []
-    for (var i = 0; i < accountRepeater.count; i++) {
-      var card = accountRepeater.itemAt(i)
-      if (!card) continue
-      // The mutation rides the card's OWN vendor — a hardcoded one here
-      // wrote kimi keys into the [zai] section.
-      if (card.pendingRemove) {
-        changes.push({ action: "remove", vendor: card.modelData.vendor, label: card.accountLabel })
+    for (var i = 0; i < accountsRepeater.count; i++) {
+      var row = accountsRepeater.itemAt(i)
+      var shape = row && row.shape ? row.shape : null
+      if (!shape) continue
+      if (row.isDraft) {
+        changes.push(shape.draftPayload())
         continue
       }
-      var fields = card.pendingFields()
-      var apiKey = card.pendingApiKey()
+      if (!row.isCard) continue
+      // The mutation rides the card's OWN vendor — a hardcoded one here
+      // once wrote kimi keys into the [zai] section.
+      if (shape.pendingRemove) {
+        changes.push({ action: "remove", vendor: shape.card.vendor, label: shape.accountLabel })
+        continue
+      }
+      var fields = shape.pendingFields()
+      var apiKey = shape.pendingApiKey()
       if ((fields && Object.keys(fields).length > 0) || apiKey)
-        changes.push({ action: "update", vendor: card.modelData.vendor, label: card.accountLabel,
+        changes.push({ action: "update", vendor: shape.card.vendor, label: shape.accountLabel,
           fields: fields && Object.keys(fields).length > 0 ? fields : undefined,
           apiKey: apiKey || undefined })
-    }
-    for (var d = 0; d < draftRepeater.count; d++) {
-      var draftCard = draftRepeater.itemAt(d)
-      if (!draftCard) continue
-      var payload = draftCard.draftPayload()
-      if (payload === null) continue
-      changes.push(payload)
     }
     return changes
   }
 
-  property int draftCount: 0
-  // Which vendor the next "Add account" button targets; drafts carry their
-  // own vendor so one list serves every multi-account provider.
-  property string addDraftVendor: "zai"
-
-  // New drafts come pre-named (Z.AI, Z.AI 2, Kimi, Kimi 2 …) so adding a
-  // key needs zero typing; the user renames only when they WANT a label.
-  function nextDraftName(vendor) {
-    var base = vendor === "kimi" ? "Kimi" : "Z.AI"
-    var taken = {}
-    for (var i = 0; i < snapshot.accounts.length; i++)
-      if (snapshot.accounts[i].vendor === vendor)
-        taken[snapshot.accounts[i].label] = true
-    for (var d = 0; d < draftRepeater.count; d++) {
-      var card = draftRepeater.itemAt(d)
-      if (card && card.draftVendor === vendor && card.draftName !== "")
-        taken[card.draftName] = true
-    }
-    if (!taken[base]) return base
-    var n = 2
-    while (taken[base + " " + n]) n++
-    return base + " " + n
-  }
+  // Vendor section ids of pending "Add account" drafts, in click order.
+  // The array changes ONLY on add/remove clicks — never on keystrokes — so
+  // the delegate TextFields keep their focus across edits.
+  property var drafts: []
 
   function addDraftAccount(vendor) {
-    if (vendor) addDraftVendor = vendor
-    draftCount++
+    drafts = drafts.concat([vendor])
   }
 
-  function removeDraftAccount() { draftCount = Math.max(0, draftCount - 1) }
+  function removeDraftAt(index) {
+    var next = drafts.slice()
+    next.splice(index, 1)
+    drafts = next
+  }
+
+  // The account section as ONE vendor-grouped model: each vendor's cards
+  // (snapshot order), then its Add button, then that vendor's pending
+  // drafts. Rust owns the grouping order and the vendor display names.
+  function accountsModel() {
+    var cards = snapshot.accounts
+    var groups = []
+    var byVendor = {}
+    for (var i = 0; i < cards.length; i++) {
+      var v = cards[i].vendor
+      if (!byVendor[v]) {
+        byVendor[v] = { vendor: v, display: String(cards[i].vendor_display || v), cards: [] }
+        groups.push(byVendor[v])
+      }
+      byVendor[v].cards.push(cards[i])
+    }
+    var model = []
+    for (var g = 0; g < groups.length; g++) {
+      var group = groups[g]
+      // The prefix bar alternates two colors across groups: Z.AI blue,
+      // Kimi purple, then blue/purple again down the list — the eye tracks
+      // group boundaries without reading any title.
+      var accent = g % 2 === 0 ? "#61afef" : "#c678dd"
+      for (var c = 0; c < group.cards.length; c++)
+        model.push({ kind: "card", data: group.cards[c], accent: accent })
+      model.push({ kind: "add", vendor: group.vendor, vendorDisplay: group.display, accent: accent })
+      for (var d = 0; d < drafts.length; d++)
+        if (drafts[d] === group.vendor)
+          model.push({ kind: "draft", vendor: group.vendor, vendorDisplay: group.display, draftIndex: d, accent: accent })
+    }
+    return model
+  }
+
+  // Whether a vendor's accounts carry the monthly_limit field — read from
+  // the vendor's own card shape, Rust decides which vendors have it.
+  function vendorSupportsLimit(vendor) {
+    var cards = snapshot.accounts
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].vendor !== vendor) continue
+      var fields = cards[i].fields || []
+      for (var f = 0; f < fields.length; f++)
+        if (fields[f].id === "monthly_limit") return true
+    }
+    return false
+  }
+
 
   function scrubSecrets() {
     pendingPayload = ""
-    for (var i = 0; i < keyRepeater.count; i++) {
-      var row = keyRepeater.itemAt(i)
-      if (row) row.scrub()
+    for (var i = 0; i < accountsRepeater.count; i++) {
+      var row = accountsRepeater.itemAt(i)
+      if (row && row.isCard && row.shape) row.shape.scrub()
     }
-    for (var j = 0; j < accountRepeater.count; j++) {
-      var card = accountRepeater.itemAt(j)
-      if (card) card.scrub()
-    }
-    draftCount = 0
+    drafts = []
   }
 
   function finishApply() {
@@ -294,8 +312,18 @@ Column {
     }
     Toggle {
       width: parent.width
+      label: "Tile every account in the top bar"
+      description: "On, the bar shows every working account side by side, each led by its provider logo — no module icon in front. Off, the bar is just the robot icon (a minimal indicator; hover or click for the numbers). The wheel and the tabs still switch the selected account. Applies immediately."
+      checked: root.barTiled
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      enabled: !root.saving
+      onClicked: root.barTiledRequested(!root.barTiled)
+    }
+    Toggle {
+      width: parent.width
       label: "Show remaining instead of used"
-      description: "Bar tiles show what is LEFT of each window by default (kmi 62% · 2h 05m). Turn this off to show the used percentage instead (kmi 38% · 2h 05m). Applies immediately."
+      description: "Bar tiles show what is LEFT of each window by default (kmi 62% · 5.3h). Turn this off to show the used percentage instead (kmi 38% · 5.3h). Applies immediately."
       checked: root.showRemaining
       foreground: root.foreground
       fontFamily: root.fontFamily
@@ -401,7 +429,7 @@ Column {
     }
     Text {
       width: parent.width
-      text: "One card per key; the account name is the bar-tile tag. Only Z.AI team keys need the two organization ids — everything else auto-detects."
+      text: "One card per key, grouped by provider with its own Add button; the bar tags accounts with the provider logo. Accounts are auto-named 1, 2, … by their order in each group — no name to type. Only Z.AI team keys need the two organization ids; the two Admin-spend vendors take an optional monthly limit."
       textFormat: Text.PlainText
       color: root.dim
       font.family: root.fontFamily
@@ -409,706 +437,518 @@ Column {
       wrapMode: Text.WordWrap
     }
 
+    // ONE vendor-grouped model: each vendor's cards (snapshot order), then
+    // its Add button right under its last key, then that vendor's pending
+    // drafts. A vendor with nothing configured shows the button alone —
+    // that empty state IS its entry point. All three shapes render through
+    // a Loader so only one exists per row, and every row stays in THIS
+    // root-level repeater (the old per-vendor delegate sections hid their
+    // repeaters from the root functions and silently killed every save).
     Repeater {
-      id: accountRepeater
-      model: root.snapshot.accounts
+      id: accountsRepeater
+      model: root.accountsModel()
 
-      BorderSurface {
-      id: accountCard
-      required property var modelData
-      readonly property string accountLabel: String(modelData.label || "")
-      property var fieldValues: ({})
-      property string apiKeyAction: "unchanged"
-      property alias apiKeyText: accountKeyField.text
-      property bool pendingRemove: false
+      Item {
+        id: row
+        required property var modelData
+        readonly property bool isCard: modelData.kind === "card"
+        readonly property bool isDraft: modelData.kind === "draft"
+        // Root helpers (collectAccountChanges/scrubSecrets) reach the
+        // loaded shape through this.
+        readonly property var shape: slot.item
+        width: parent ? parent.width : 0
+        implicitHeight: slot.implicitHeight
 
-      function fieldValue(field) {
-        return Object.prototype.hasOwnProperty.call(fieldValues, field.id)
-          ? fieldValues[field.id] : String(field.value || "")
-      }
-
-      function setFieldValue(field, value) {
-        var next = {}
-        for (var key in fieldValues) next[key] = fieldValues[key]
-        next[field.id] = String(value || "")
-        fieldValues = next
-      }
-
-      function pendingFields() {
-        var changes = {}
-        var fields = modelData.fields || []
-        var known = {}
-        for (var i = 0; i < fields.length; i++) {
-          known[fields[i].id] = true
-          if (fields[i].kind === "secret") continue
-          var current = fieldValue(fields[i])
-          if (current !== String(fields[i].value || "")) changes[fields[i].id] = current
-        }
-        // Values typed into client-side synthesized inputs (the team ids
-        // that appear when the type flips to team mid-edit) have no
-        // snapshot field to diff against — send them as-is.
-        for (var key in fieldValues) {
-          if (!known[key] && fieldValues[key] !== "") changes[key] = fieldValues[key]
-        }
-        return changes
-      }
-
-      function pendingApiKey() {
-        if (apiKeyAction === "set") return { action: "set", value: apiKeyText }
-        if (apiKeyAction === "clear") return { action: "clear" }
-        return null
-      }
-
-      function fieldOptions(field) {
-        var options = []
-        for (var i = 0; i < field.choices.length; i++) {
-          var choice = field.choices[i]
-          var label = (field.labels && field.labels[choice] !== undefined)
-            ? field.labels[choice] : choice
-          options.push({ id: choice, value: choice, label: label === "" ? "auto" : label })
-        }
-        return options
-      }
-
-      readonly property bool teamIncomplete: {
-        var fields = modelData.fields || []
-        var type = "", org = "", proj = ""
-        for (var i = 0; i < fields.length; i++) {
-          if (fields[i].id === "account_type") type = fieldValue(fields[i])
-          if (fields[i].id === "organization_id") org = fieldValue(fields[i])
-          if (fields[i].id === "project_id") proj = fieldValue(fields[i])
-        }
-        return type === "team" && (org === "" || proj === "")
-      }
-
-      function scrub() {
-        fieldValues = ({})
-        apiKeyAction = "unchanged"
-        apiKeyText = ""
-        pendingRemove = false
-      }
-
-      Component.onCompleted: root.registerAccountCard(accountCard)
-      Component.onDestruction: root.unregisterAccountCard(accountCard)
-
-      width: parent.width
-      implicitHeight: accountColumn.implicitHeight + Style.spacing.xl * 2
-      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
-      borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, pendingRemove ? 0.35 : 0.10), 1)
-      radius: Style.cornerRadius
-
-      // Provider accent bar — one glance tells a Z.AI card from a Kimi
-      // card before any text is read.
-      Rectangle {
-        width: 3
-        radius: 1.5
-        color: accountCard.modelData.vendor === "kimi" ? "#c678dd" : "#61afef"
-        anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.topMargin: 6
-        anchors.bottomMargin: 6
-      }
-
-      Column {
-        id: accountColumn
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: Style.space(12)
-        anchors.rightMargin: Style.space(12)
-        spacing: Style.space(6)
-
-        Item {
+        Loader {
+          id: slot
           width: parent.width
-          implicitHeight: Math.max(accountTitle.implicitHeight, accountStatus.implicitHeight, removeAccountButton.implicitHeight)
+          sourceComponent: row.isCard ? cardShape : row.isDraft ? draftShape : addShape
+        }
 
-          Text {
-            id: accountTitle
-            anchors.left: parent.left
-            anchors.right: accountStatus.left
-            anchors.rightMargin: Style.spacing.md
-            text: root.safe((accountCard.modelData.vendor === "kimi" ? "Kimi · " : "Z.AI · ")
-              + accountCard.modelData.display)
-            textFormat: Text.PlainText
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            elide: Text.ElideRight
-          }
-          Text {
-            id: accountStatus
-            anchors.right: removeAccountButton.left
-            anchors.rightMargin: Style.spacing.sm
-            text: accountCard.apiKeyAction === "clear" ? "key will clear"
-              : accountCard.apiKeyAction === "set" ? "new key"
-              : accountCard.pendingRemove ? "will remove"
-              : accountCard.modelData.environment_configured ? "environment override"
-              : accountCard.modelData.inline_configured ? "key stored"
-              : "no key"
-            textFormat: Text.PlainText
-            color: (accountCard.pendingRemove || accountCard.apiKeyAction === "clear") ? root.urgent : root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-          PanelActionButton {
-            id: removeAccountButton
-            anchors.right: parent.right
-            anchors.verticalCenter: accountTitle.verticalCenter
-            iconText: accountCard.pendingRemove ? "󰕌" : "󰆴"
-            tooltipText: accountCard.pendingRemove
-              ? "Keep this account" : "Remove this account"
+        Component {
+          id: addShape
+          Button {
+            width: parent ? parent.width : 0
+            text: "Add " + row.modelData.vendorDisplay + " Account"
+            iconText: "󰐗"
+            bordered: true
+            focusable: true
             foreground: root.foreground
-            hoverColor: accountCard.pendingRemove ? root.foreground : root.urgent
             fontFamily: root.fontFamily
             enabled: !root.saving
-            onClicked: accountCard.pendingRemove = !accountCard.pendingRemove
+            onClicked: root.addDraftAccount(row.modelData.vendor)
           }
         }
 
-        Repeater {
-          model: accountCard.modelData.fields
+        Component {
+          id: draftShape
+          BorderSurface {
+            id: draftCard
+            readonly property string draftVendor: row.modelData.vendor
+            readonly property bool supportsLimit: root.vendorSupportsLimit(draftCard.draftVendor)
+            property var draftFields: ({ account_type: "personal" })
+            property string draftKeyValue: ""
+            property string draftLimitValue: ""
 
-          Column {
-            id: accountFieldRow
-            required property var modelData
-            width: parent.width
-            spacing: Style.space(4)
-
-            Text {
-              width: parent.width
-              text: root.safe(accountFieldRow.modelData.label)
-              textFormat: Text.PlainText
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+            function setDraftField(key, value) {
+              var next = {}
+              for (var k in draftFields) next[k] = draftFields[k]
+              next[key] = String(value || "")
+              draftFields = next
             }
 
-            Dropdown {
-              visible: accountFieldRow.modelData.kind === "choice"
-              width: parent.width
-              showLabel: false
-              value: accountCard.fieldValue(accountFieldRow.modelData)
-              options: accountCard.fieldOptions(accountFieldRow.modelData)
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !root.saving && !accountCard.pendingRemove
-              onChanged: function(value) { accountCard.setFieldValue(accountFieldRow.modelData, value) }
+            // No name field: the account's name is its position (1, 2, …).
+            // Z.AI drafts carry their billing shape; every other vendor is
+            // a key (and, for the spend vendors, a monthly limit).
+            function draftPayload() {
+              var fields = {}
+              if (draftVendor === "zai") {
+                fields = draftFields
+              } else if (supportsLimit && draftLimitValue.trim() !== "") {
+                fields.monthly_limit = draftLimitValue.trim()
+              }
+              var payload = { action: "add", vendor: draftVendor, fields: fields }
+              if (draftKeyValue !== "") payload.apiKey = { action: "set", value: draftKeyValue }
+              return payload
             }
 
-            TextField {
-              visible: accountFieldRow.modelData.kind === "text"
-              width: parent.width
-              enabled: !root.saving && !accountCard.pendingRemove
-              text: accountCard.fieldValue(accountFieldRow.modelData)
-              placeholderText: accountFieldRow.modelData.id === "name"
-                ? "bar tile name" : ""
-              foreground: root.foreground
-              onTextEdited: accountCard.setFieldValue(accountFieldRow.modelData, text)
-              Keys.onEscapePressed: focus = false
-              onAccepted: root.save()
+            width: parent ? parent.width : 0
+            implicitHeight: draftColumn.implicitHeight + Style.spacing.xl * 2
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
+            borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10), 1)
+            radius: Style.cornerRadius
+
+            // Same provider accent as the saved cards.
+            Rectangle {
+              width: 3
+              radius: 1.5
+              color: row.modelData.accent
+              anchors.left: parent.left
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              anchors.topMargin: 6
+              anchors.bottomMargin: 6
             }
-          }
-        }
 
-        // Switching the type to team client-side must surface the id inputs
-        // immediately — the snapshot only carries them for accounts that
-        // were already team-typed when it was taken.
-        Repeater {
-          model: {
-            var typeField = null
-            var hasOrg = false
-            var fields = accountCard.modelData.fields || []
-            for (var i = 0; i < fields.length; i++) {
-              if (fields[i].id === "account_type") typeField = fields[i]
-              if (fields[i].id === "organization_id") hasOrg = true
-            }
-            return (typeField && accountCard.fieldValue(typeField) === "team" && !hasOrg)
-              ? ["organization_id", "project_id"] : []
-          }
+            Column {
+              id: draftColumn
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.leftMargin: Style.space(12)
+              anchors.rightMargin: Style.space(12)
+              spacing: Style.space(6)
 
-          Column {
-            id: synthRow
-            required property var modelData
-            width: parent.width
-            spacing: Style.space(4)
+              Item {
+                width: parent.width
+                implicitHeight: draftTitle.implicitHeight
+                Text {
+                  id: draftTitle
+                  text: "New " + row.modelData.vendorDisplay + " account"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+                PanelActionButton {
+                  anchors.right: parent.right
+                  anchors.verticalCenter: draftTitle.verticalCenter
+                  iconText: "󰆴"
+                  tooltipText: "Discard this draft"
+                  foreground: root.foreground
+                  hoverColor: root.urgent
+                  fontFamily: root.fontFamily
+                  enabled: !root.saving
+                  onClicked: root.removeDraftAt(row.modelData.draftIndex)
+                }
+              }
 
-            Text {
-              width: parent.width
-              text: synthRow.modelData === "organization_id"
-                ? root.safe("Organization ID") : root.safe("Project ID")
-              textFormat: Text.PlainText
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            TextField {
-              width: parent.width
-              enabled: !root.saving && !accountCard.pendingRemove
-              placeholderText: synthRow.modelData === "organization_id" ? "org-…" : "proj-…"
-              foreground: root.foreground
-              onTextEdited: accountCard.setFieldValue(
-                { id: synthRow.modelData, value: "" }, text)
-              Keys.onEscapePressed: focus = false
-              onAccepted: root.save()
-            }
-          }
-        }
+              Text {
+                visible: draftCard.draftVendor === "zai"
+                width: parent.width
+                text: root.safe("Account type")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Dropdown {
+                visible: draftCard.draftVendor === "zai"
+                width: parent.width
+                showLabel: false
+                value: draftCard.draftFields.account_type || "personal"
+                options: [
+                  { id: "personal", value: "personal", label: "personal" },
+                  { id: "team", value: "team", label: "team" },
+                  { id: "usage", value: "usage", label: "usage" }
+                ]
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                enabled: !root.saving
+                onChanged: function(value) { draftCard.setDraftField("account_type", value) }
+              }
 
-        // The API key row — always last.
-        Row {
-          width: parent.width
-          spacing: Style.space(8)
+              TextField {
+                visible: draftCard.draftVendor === "zai" && draftCard.draftFields.account_type === "team"
+                width: parent.width
+                enabled: !root.saving
+                placeholderText: "Organization ID"
+                foreground: root.foreground
+                onTextEdited: draftCard.setDraftField("organization_id", text)
+              }
+              TextField {
+                visible: draftCard.draftVendor === "zai" && draftCard.draftFields.account_type === "team"
+                width: parent.width
+                enabled: !root.saving
+                placeholderText: "Project ID"
+                foreground: root.foreground
+                onTextEdited: draftCard.setDraftField("project_id", text)
+              }
 
-          TextField {
-            id: accountKeyField
-            width: parent.width - accountKeyClear.width - parent.spacing
-            password: true
-            enabled: !root.saving && accountCard.apiKeyAction !== "clear" && !accountCard.pendingRemove
-            placeholderText: accountCard.modelData.configured
-              ? "Leave blank to keep current key" : "Paste API key"
-            foreground: root.foreground
-            onTextEdited: accountCard.apiKeyAction = text.length > 0 ? "set" : "unchanged"
-            Keys.onEscapePressed: focus = false
-            onAccepted: root.save()
-          }
+              TextField {
+                visible: draftCard.supportsLimit
+                width: parent.width
+                enabled: !root.saving
+                placeholderText: "Monthly limit (USD, optional)"
+                foreground: root.foreground
+                onTextEdited: draftCard.draftLimitValue = text
+                Keys.onEscapePressed: focus = false
+              }
 
-          PanelActionButton {
-            id: accountKeyClear
-            anchors.verticalCenter: accountKeyField.verticalCenter
-            iconText: accountCard.apiKeyAction === "clear" ? "󰕌" : "󰆴"
-            tooltipText: accountCard.apiKeyAction === "clear"
-              ? "Keep the stored key" : "Clear the stored inline key"
-            foreground: root.foreground
-            hoverColor: accountCard.apiKeyAction === "clear" ? root.foreground : root.urgent
-            fontFamily: root.fontFamily
-            enabled: !root.saving
-              && (accountCard.modelData.inline_configured || accountCard.apiKeyAction === "clear")
-            onClicked: {
-              if (accountCard.apiKeyAction === "clear") {
-                accountCard.apiKeyAction = "unchanged"
-              } else {
-                accountKeyField.text = ""
-                accountCard.apiKeyAction = "clear"
+              TextField {
+                width: parent.width
+                password: true
+                enabled: !root.saving
+                placeholderText: "API key"
+                foreground: root.foreground
+                onTextEdited: draftCard.draftKeyValue = text
+                Keys.onEscapePressed: focus = false
+                onAccepted: root.save()
+              }
+
+              // The apply affordance lives WITH the form: the global save at
+              // the bottom of a long settings page is below the fold exactly
+              // when a draft was just filled in.
+              Button {
+                width: parent.width
+                text: root.saving ? "Saving…" : "Apply"
+                iconText: root.saving ? "󰑐" : "󰄬"
+                iconSpinning: root.saving
+                bordered: true
+                focusable: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                enabled: root.canSave
+                onClicked: root.save()
               }
             }
           }
         }
 
-        Text {
-          visible: accountCard.teamIncomplete && !accountCard.pendingRemove
-          width: parent.width
-          text: "A team key needs both ids. bigmodel.cn console → F12 → Application → Local Storage → Bigmodel-Organization / Bigmodel-Project."
-          textFormat: Text.PlainText
-          color: root.urgent
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-        }
+        Component {
+          id: cardShape
+          BorderSurface {
+          id: accountCard
+          readonly property var card: row.modelData.data
+          readonly property string accountLabel: String(card.label || "")
+          property var fieldValues: ({})
+          property string apiKeyAction: "unchanged"
+          property alias apiKeyText: accountKeyField.text
+          property bool pendingRemove: false
 
-        Button {
-          width: parent.width
-          text: root.saving ? "Saving…" : "Apply"
-          iconText: root.saving ? "󰑐" : "󰄬"
-          iconSpinning: root.saving
-          bordered: true
-          focusable: true
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          enabled: root.canSave && !accountCard.pendingRemove
-          onClicked: root.save()
-        }
-      }
-      }
-
-    }
-
-    Repeater {
-    id: draftRepeater
-    model: root.draftCount
-
-    BorderSurface {
-      id: draftCard
-      required property int index
-      property string draftName: ""
-      property var draftFields: ({ account_type: "personal" })
-      property string draftKeyValue: ""
-      // The vendor this draft belongs to; snapshotted at creation — a
-      // binding would flip this draft's fields when the OTHER vendor's Add
-      // button is used later.
-      property string draftVendor: ""
-      property bool nameTouched: false
-
-      Component.onCompleted: {
-        draftVendor = root.addDraftVendor
-        draftName = root.nextDraftName(draftVendor)
-      }
-
-      function switchVendor(vendor) {
-        if (vendor === draftVendor) return
-        draftVendor = vendor
-        root.addDraftVendor = vendor
-        // Vendor-specific defaults restart; an untouched auto-name follows
-        // the new vendor base, a user-typed name is kept.
-        draftFields = ({ account_type: "personal" })
-        if (!nameTouched) draftName = root.nextDraftName(vendor)
-      }
-
-      function setDraftField(key, value) {
-        var next = {}
-        for (var k in draftFields) next[k] = draftFields[k]
-        next[key] = String(value || "")
-        draftFields = next
-      }
-
-      function draftNameTaken() {
-        var wanted = draftName.trim().toLowerCase()
-        if (wanted === "") return false
-        for (var i = 0; i < root.snapshot.accounts.length; i++) {
-          var account = root.snapshot.accounts[i]
-          if (account.vendor !== draftVendor) continue
-          if (String(account.label).toLowerCase() === wanted) return true
-        }
-        for (var d = 0; d < draftRepeater.count; d++) {
-          var card = draftRepeater.itemAt(d)
-          if (card && card !== draftCard && card.draftVendor === draftVendor
-            && String(card.draftName).trim().toLowerCase() === wanted)
-            return true
-        }
-        return false
-      }
-
-      function draftPayload() {
-        if (draftName.trim() === "" || draftNameTaken()) return null
-        var fields = draftVendor === "kimi" ? {} : draftFields
-        var payload = { action: "add", vendor: draftVendor, name: draftName.trim(),
-          fields: fields }
-        if (draftKeyValue !== "") payload.apiKey = { action: "set", value: draftKeyValue }
-        return payload
-      }
-
-      width: draftRepeater.parent.width
-      implicitHeight: draftColumn.implicitHeight + Style.spacing.xl * 2
-      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
-      borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10), 1)
-      radius: Style.cornerRadius
-
-      // Same provider accent as the saved cards, following the draft's own
-      // vendor (it does not change when another Add button is used).
-      Rectangle {
-        width: 3
-        radius: 1.5
-        color: draftCard.draftVendor === "kimi" ? "#c678dd" : "#61afef"
-        anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.topMargin: 6
-        anchors.bottomMargin: 6
-      }
-
-      Column {
-        id: draftColumn
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: Style.space(12)
-        anchors.rightMargin: Style.space(12)
-        spacing: Style.space(6)
-
-        Item {
-          width: parent.width
-          implicitHeight: draftTitle.implicitHeight
-          Text {
-            id: draftTitle
-            text: "New account"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
+          function fieldValue(field) {
+            return Object.prototype.hasOwnProperty.call(fieldValues, field.id)
+              ? fieldValues[field.id] : String(field.value || "")
           }
-          PanelActionButton {
+
+          function setFieldValue(field, value) {
+            var next = {}
+            for (var key in fieldValues) next[key] = fieldValues[key]
+            next[field.id] = String(value || "")
+            fieldValues = next
+          }
+
+          function pendingFields() {
+            var changes = {}
+            var fields = card.fields || []
+            var known = {}
+            for (var i = 0; i < fields.length; i++) {
+              known[fields[i].id] = true
+              if (fields[i].kind === "secret") continue
+              var current = fieldValue(fields[i])
+              if (current !== String(fields[i].value || "")) changes[fields[i].id] = current
+            }
+            // Values typed into client-side synthesized inputs (the team ids
+            // that appear when the type flips to team mid-edit) have no
+            // snapshot field to diff against — send them as-is.
+            for (var key in fieldValues) {
+              if (!known[key] && fieldValues[key] !== "") changes[key] = fieldValues[key]
+            }
+            return changes
+          }
+
+          function pendingApiKey() {
+            if (apiKeyAction === "set") return { action: "set", value: apiKeyText }
+            if (apiKeyAction === "clear") return { action: "clear" }
+            return null
+          }
+
+          function fieldOptions(field) {
+            var options = []
+            for (var i = 0; i < field.choices.length; i++) {
+              var choice = field.choices[i]
+              var label = (field.labels && field.labels[choice] !== undefined)
+                ? field.labels[choice] : choice
+              options.push({ id: choice, value: choice, label: label === "" ? "auto" : label })
+            }
+            return options
+          }
+
+          readonly property bool teamIncomplete: {
+            var fields = card.fields || []
+            var type = "", org = "", proj = ""
+            for (var i = 0; i < fields.length; i++) {
+              if (fields[i].id === "account_type") type = fieldValue(fields[i])
+              if (fields[i].id === "organization_id") org = fieldValue(fields[i])
+              if (fields[i].id === "project_id") proj = fieldValue(fields[i])
+            }
+            return type === "team" && (org === "" || proj === "")
+          }
+
+          function scrub() {
+            fieldValues = ({})
+            apiKeyAction = "unchanged"
+            apiKeyText = ""
+            pendingRemove = false
+          }
+
+          width: parent ? parent.width : 0
+          implicitHeight: accountColumn.implicitHeight + Style.spacing.xl * 2
+          color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
+          borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, pendingRemove ? 0.35 : 0.10), 1)
+          radius: Style.cornerRadius
+
+          // Provider accent bar — one glance tells a Z.AI card from a Kimi
+          // card before any text is read.
+          Rectangle {
+            width: 3
+            radius: 1.5
+            color: row.modelData.accent
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.topMargin: 6
+            anchors.bottomMargin: 6
+          }
+
+          Column {
+            id: accountColumn
+            anchors.left: parent.left
             anchors.right: parent.right
-            anchors.verticalCenter: draftTitle.verticalCenter
-            iconText: "󰆴"
-            tooltipText: "Discard this draft"
-            foreground: root.foreground
-            hoverColor: root.urgent
-            fontFamily: root.fontFamily
-            enabled: !root.saving
-            onClicked: root.removeDraftAccount()
-          }
-        }
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: Style.space(12)
+            anchors.rightMargin: Style.space(12)
+            spacing: Style.space(6)
 
-        Text {
-          width: parent.width
-          text: root.safe("Provider")
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-        Dropdown {
-          width: parent.width
-          showLabel: false
-          value: draftCard.draftVendor
-          options: [
-            { id: "zai", value: "zai", label: "Z.AI" },
-            { id: "kimi", value: "kimi", label: "Kimi" }
-          ]
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          enabled: !root.saving
-          onChanged: function(value) { draftCard.switchVendor(value) }
-        }
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(accountTitle.implicitHeight, accountStatus.implicitHeight, removeAccountButton.implicitHeight)
 
-        TextField {
-          width: parent.width
-          enabled: !root.saving
-          text: draftCard.draftName
-          placeholderText: "Account name (bar tile tag)"
-          foreground: draftCard.draftNameTaken() ? root.urgent : root.foreground
-          onTextEdited: {
-            draftCard.nameTouched = true
-            draftCard.draftName = text
-          }
-          Keys.onEscapePressed: focus = false
-        }
-
-        Text {
-          visible: draftCard.draftNameTaken()
-          width: parent.width
-          text: "That name is already in use — pick another."
-          textFormat: Text.PlainText
-          color: root.urgent
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-
-        Text {
-          visible: draftCard.draftVendor !== "kimi"
-          width: parent.width
-          text: root.safe("Account type")
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-        Dropdown {
-          visible: draftCard.draftVendor !== "kimi"
-          width: parent.width
-          showLabel: false
-          value: draftCard.draftFields.account_type || "personal"
-          options: [
-            { id: "personal", value: "personal", label: "personal" },
-            { id: "team", value: "team", label: "team" },
-            { id: "usage", value: "usage", label: "usage" }
-          ]
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          enabled: !root.saving && draftCard.draftVendor !== "kimi"
-          onChanged: function(value) { draftCard.setDraftField("account_type", value) }
-        }
-
-        TextField {
-          visible: draftCard.draftVendor !== "kimi" && draftCard.draftFields.account_type === "team"
-          width: parent.width
-          enabled: !root.saving
-          placeholderText: "Organization ID"
-          foreground: root.foreground
-          onTextEdited: draftCard.setDraftField("organization_id", text)
-        }
-        TextField {
-          visible: draftCard.draftVendor !== "kimi" && draftCard.draftFields.account_type === "team"
-          width: parent.width
-          enabled: !root.saving
-          placeholderText: "Project ID"
-          foreground: root.foreground
-          onTextEdited: draftCard.setDraftField("project_id", text)
-        }
-
-        TextField {
-          width: parent.width
-          password: true
-          enabled: !root.saving
-          placeholderText: "API key"
-          foreground: root.foreground
-          onTextEdited: draftCard.draftKeyValue = text
-          Keys.onEscapePressed: focus = false
-          onAccepted: root.save()
-        }
-
-        // The apply affordance lives WITH the form: the global save at
-        // the bottom of a long settings page is below the fold exactly
-        // when a draft was just filled in.
-        Button {
-          width: parent.width
-          text: root.saving ? "Saving…" : "Apply"
-          iconText: root.saving ? "󰑐" : "󰄬"
-          iconSpinning: root.saving
-          bordered: true
-          focusable: true
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          enabled: root.canSave
-          onClicked: root.save()
-        }
-      }
-    }
-    }
-
-    Button {
-      width: parent.width
-      text: "Add account"
-      iconText: "󰐗"
-      bordered: true
-      focusable: true
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      enabled: !root.saving
-      onClicked: root.addDraftAccount()
-    }
-  }
-
-  Column {
-    visible: !root.loading && root.snapshot.keys.length > 0
-    width: parent.width
-    spacing: Style.space(10)
-
-    PanelSeparator {
-      width: parent.width
-      foreground: root.foreground
-    }
-    PanelSectionHeader {
-      text: "API KEYS"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-    }
-    Text {
-      width: parent.width
-      text: "Stored values are never loaded into the shell. Leave a field blank to keep its current value, or use the clear button to remove an inline key. Environment variables take precedence."
-      textFormat: Text.PlainText
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.WordWrap
-    }
-
-    Repeater {
-      id: keyRepeater
-      model: root.snapshot.keys
-
-      BorderSurface {
-        id: keyCard
-        required property var modelData
-        readonly property string vendorId: String(modelData.id || "")
-        property string pendingAction: "unchanged"
-        property alias secretText: keyField.text
-        function scrub() {
-          keyField.text = ""
-          pendingAction = "unchanged"
-        }
-
-        width: keyRepeater.parent.width
-        implicitHeight: keyColumn.implicitHeight + Style.spacing.xl * 2
-        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
-        borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10), 1)
-        radius: Style.cornerRadius
-
-        Column {
-          id: keyColumn
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: Style.space(12)
-          anchors.rightMargin: Style.space(12)
-          spacing: Style.space(6)
-
-          Item {
-            width: parent.width
-            implicitHeight: Math.max(keyLabel.implicitHeight, keyStatus.implicitHeight)
-
-            Text {
-              id: keyLabel
-              anchors.left: parent.left
-              anchors.right: keyStatus.left
-              anchors.rightMargin: Style.spacing.md
-              text: root.safe(keyCard.modelData.label)
-              textFormat: Text.PlainText
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-              elide: Text.ElideRight
-            }
-            Text {
-              id: keyStatus
-              anchors.right: parent.right
-              text: keyCard.pendingAction === "clear" ? "will clear"
-                : keyCard.pendingAction === "set" ? "new key"
-                : keyCard.modelData.environment_configured ? "environment override"
-                : keyCard.modelData.inline_configured ? "stored"
-                : "not configured"
-              textFormat: Text.PlainText
-              color: keyCard.pendingAction === "clear" ? root.urgent : root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-
-          Text {
-            visible: text !== ""
-            width: parent.width
-            text: {
-              var parts = []
-              if (keyCard.modelData.environment) parts.push(root.safe(keyCard.modelData.environment))
-              if (keyCard.modelData.note) parts.push(root.safe(keyCard.modelData.note))
-              return parts.join(" · ")
-            }
-            textFormat: Text.PlainText
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-          }
-
-          Row {
-            width: parent.width
-            spacing: Style.space(8)
-
-            TextField {
-              id: keyField
-              width: parent.width - clearButton.width - parent.spacing
-              password: true
-              enabled: !root.saving && keyCard.pendingAction !== "clear"
-              placeholderText: keyCard.modelData.configured
-                ? "Leave blank to keep current key" : "Paste API key"
-              foreground: root.foreground
-              onTextEdited: keyCard.pendingAction = text.length > 0 ? "set" : "unchanged"
-              Keys.onEscapePressed: focus = false
-              onAccepted: root.save()
+              Text {
+                id: accountTitle
+                anchors.left: parent.left
+                anchors.right: accountStatus.left
+                anchors.rightMargin: Style.spacing.md
+                text: root.safe(accountCard.card.vendor_display
+                  + (accountCard.accountLabel === "" ? "" : " · " + accountCard.card.display))
+                textFormat: Text.PlainText
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                elide: Text.ElideRight
+              }
+              Text {
+                id: accountStatus
+                anchors.right: removeAccountButton.left
+                anchors.rightMargin: Style.spacing.sm
+                text: accountCard.apiKeyAction === "clear" ? "key will clear"
+                  : accountCard.apiKeyAction === "set" ? "new key"
+                  : accountCard.pendingRemove ? "will remove"
+                  : accountCard.card.environment_configured ? "environment override"
+                  : accountCard.card.inline_configured ? "key stored"
+                  : "no key"
+                textFormat: Text.PlainText
+                color: (accountCard.pendingRemove || accountCard.apiKeyAction === "clear") ? root.urgent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              PanelActionButton {
+                id: removeAccountButton
+                anchors.right: parent.right
+                anchors.verticalCenter: accountTitle.verticalCenter
+                iconText: accountCard.pendingRemove ? "󰕌" : "󰆴"
+                tooltipText: accountCard.pendingRemove
+                  ? "Keep this account" : "Remove this account"
+                foreground: root.foreground
+                hoverColor: accountCard.pendingRemove ? root.foreground : root.urgent
+                fontFamily: root.fontFamily
+                enabled: !root.saving
+                onClicked: accountCard.pendingRemove = !accountCard.pendingRemove
+              }
             }
 
-            PanelActionButton {
-              id: clearButton
-              anchors.verticalCenter: keyField.verticalCenter
-              iconText: keyCard.pendingAction === "clear" ? "󰕌" : "󰆴"
-              tooltipText: keyCard.pendingAction === "clear"
-                ? "Keep the stored key" : "Clear the stored inline key"
-              foreground: root.foreground
-              hoverColor: keyCard.pendingAction === "clear" ? root.foreground : root.urgent
-              fontFamily: root.fontFamily
-              focusable: true
-              enabled: !root.saving && (keyCard.modelData.inline_configured || keyCard.pendingAction === "clear")
-              onClicked: {
-                if (keyCard.pendingAction === "clear") {
-                  keyCard.pendingAction = "unchanged"
-                } else {
-                  keyField.text = ""
-                  keyCard.pendingAction = "clear"
+            Repeater {
+              model: accountCard.card.fields
+
+              Column {
+                id: accountFieldRow
+                required property var modelData
+                width: parent.width
+                spacing: Style.space(4)
+
+                Text {
+                  width: parent.width
+                  text: root.safe(accountFieldRow.modelData.label)
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Dropdown {
+                  visible: accountFieldRow.modelData.kind === "choice"
+                  width: parent.width
+                  showLabel: false
+                  value: accountCard.fieldValue(accountFieldRow.modelData)
+                  options: accountCard.fieldOptions(accountFieldRow.modelData)
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  enabled: !root.saving && !accountCard.pendingRemove
+                  onChanged: function(value) { accountCard.setFieldValue(accountFieldRow.modelData, value) }
+                }
+
+                TextField {
+                  visible: accountFieldRow.modelData.kind === "text"
+                  width: parent.width
+                  enabled: !root.saving && !accountCard.pendingRemove
+                  text: accountCard.fieldValue(accountFieldRow.modelData)
+                  foreground: root.foreground
+                  onTextEdited: accountCard.setFieldValue(accountFieldRow.modelData, text)
+                  Keys.onEscapePressed: focus = false
+                  onAccepted: root.save()
                 }
               }
             }
-          }
 
+            // Switching the type to team client-side must surface the id inputs
+            // immediately — the snapshot only carries them for accounts that
+            // were already team-typed when it was taken.
+            Repeater {
+              model: {
+                var typeField = null
+                var hasOrg = false
+                var fields = accountCard.card.fields || []
+                for (var i = 0; i < fields.length; i++) {
+                  if (fields[i].id === "account_type") typeField = fields[i]
+                  if (fields[i].id === "organization_id") hasOrg = true
+                }
+                return (typeField && accountCard.fieldValue(typeField) === "team" && !hasOrg)
+                  ? ["organization_id", "project_id"] : []
+              }
+
+              Column {
+                id: synthRow
+                required property var modelData
+                width: parent.width
+                spacing: Style.space(4)
+
+                Text {
+                  width: parent.width
+                  text: synthRow.modelData === "organization_id"
+                    ? root.safe("Organization ID") : root.safe("Project ID")
+                  textFormat: Text.PlainText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                TextField {
+                  width: parent.width
+                  enabled: !root.saving && !accountCard.pendingRemove
+                  placeholderText: synthRow.modelData === "organization_id" ? "org-…" : "proj-…"
+                  foreground: root.foreground
+                  onTextEdited: accountCard.setFieldValue(
+                    { id: synthRow.modelData, value: "" }, text)
+                  Keys.onEscapePressed: focus = false
+                  onAccepted: root.save()
+                }
+              }
+            }
+
+            // The API key row — always last.
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              TextField {
+                id: accountKeyField
+                width: parent.width - accountKeyClear.width - parent.spacing
+                password: true
+                enabled: !root.saving && accountCard.apiKeyAction !== "clear" && !accountCard.pendingRemove
+                placeholderText: accountCard.card.configured
+                  ? "Leave blank to keep current key" : "Paste API key"
+                foreground: root.foreground
+                onTextEdited: accountCard.apiKeyAction = text.length > 0 ? "set" : "unchanged"
+                Keys.onEscapePressed: focus = false
+                onAccepted: root.save()
+              }
+
+              PanelActionButton {
+                id: accountKeyClear
+                anchors.verticalCenter: accountKeyField.verticalCenter
+                iconText: accountCard.apiKeyAction === "clear" ? "󰕌" : "󰆴"
+                tooltipText: accountCard.apiKeyAction === "clear"
+                  ? "Keep the stored key" : "Clear the stored inline key"
+                foreground: root.foreground
+                hoverColor: accountCard.apiKeyAction === "clear" ? root.foreground : root.urgent
+                fontFamily: root.fontFamily
+                enabled: !root.saving
+                  && (accountCard.card.inline_configured || accountCard.apiKeyAction === "clear")
+                onClicked: {
+                  if (accountCard.apiKeyAction === "clear") {
+                    accountCard.apiKeyAction = "unchanged"
+                  } else {
+                    accountKeyField.text = ""
+                    accountCard.apiKeyAction = "clear"
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: accountCard.teamIncomplete && !accountCard.pendingRemove
+              width: parent.width
+              text: "A team key needs both ids. bigmodel.cn console → F12 → Application → Local Storage → Bigmodel-Organization / Bigmodel-Project."
+              textFormat: Text.PlainText
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Button {
+              width: parent.width
+              text: root.saving ? "Saving…" : "Apply"
+              iconText: root.saving ? "󰑐" : "󰄬"
+              iconSpinning: root.saving
+              bordered: true
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              enabled: root.canSave && !accountCard.pendingRemove
+              onClicked: root.save()
+            }
+          }
+          }
         }
       }
     }
@@ -1140,8 +980,8 @@ Column {
 
   Button {
     visible: !root.loading
-      && (root.snapshot.primary_choices.length > 0 || root.snapshot.keys.length > 0
-        || root.snapshot.accounts.length > 0 || root.draftCount > 0)
+      && (root.snapshot.primary_choices.length > 0
+        || root.snapshot.accounts.length > 0 || root.drafts.length > 0)
     width: parent.width
     text: root.saving ? "Saving…" : "Save settings"
     iconText: root.saving ? "󰑐" : "󰄬"

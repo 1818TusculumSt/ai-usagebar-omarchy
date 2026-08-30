@@ -57,14 +57,20 @@ Panel {
   property bool cursorActive: false
   property bool settingsOpen: false
 
+  // Default 60s: one poll per cache TTL — the binary serves cached data
+  // within its 60s TTL anyway, so a faster poll would only burn CPU while
+  // a slower one leaves the bar up to N minutes behind.
   readonly property int refreshIntervalSec: Math.max(30, Math.min(3600,
-    Number(setting("refreshIntervalSec", 300)) || 300))
+    Number(setting("refreshIntervalSec", 60)) || 60))
   readonly property string configuredProvider: String(setting("provider", "") || "").trim()
   readonly property string rememberedEntryId: String(setting("lastSelectedEntryId", "") || "").trim()
   // The one remaining display toggle: tiles show what is LEFT of each
-  // window by default; this flips them to the USED percentage. (Tiling
-  // itself and showing the value are not optional anymore.)
+  // window by default; this flips them to the USED percentage.
   readonly property bool showRemaining: Model.booleanSetting(setting("showRemaining", true), true)
+  // Tile every working account side by side (default), or collapse the bar
+  // to the SELECTED account alone — the wheel cycle and tabs stay the
+  // selector. Off is the pre-tiling single-account presentation.
+  readonly property bool barTiled: Model.booleanSetting(setting("barTiled", true), true)
   readonly property var visibleEntries: Model.filteredEntries(entries, configuredProvider)
   // Panel tabs show only agents that actually read; unconfigured/broken
   // ones keep their status hint but no tab.
@@ -80,6 +86,9 @@ Panel {
   readonly property var entrySections: entry ? entry.sections : []
   readonly property bool filterMiss: configuredProvider !== "" && entries.length > 0 && visibleEntries.length === 0
   readonly property bool alarming: Model.isAlarming(entry) || loadError !== "" || filterMiss
+  // Fresh install: every entry is "not configured yet" — the panel opens
+  // straight into Settings (once; closing it is a choice, not a loop).
+  property bool autoSettingsDone: false
 
   function alpha(color, opacity) {
     return Qt.rgba(color.r, color.g, color.b, opacity)
@@ -131,6 +140,12 @@ Panel {
     persistWidgetSettings({ showRemaining: next })
   }
 
+  function setBarTiled(enabled) {
+    var next = enabled === true
+    if (next === barTiled) return
+    persistWidgetSettings({ barTiled: next })
+  }
+
   function selectEntryById(id) {
     var index = Model.selectedIndex(visibleEntries, id)
     if (index >= 0) selectEntry(index)
@@ -165,6 +180,7 @@ Panel {
       loadError = ""
       lastSuccessfulMs = Date.now()
       syncSelection()
+      maybeAutoOpenSettings()
     } else {
       var detail = commandStderr.trim()
       loadError = lastExitCode === 127
@@ -173,6 +189,19 @@ Panel {
     }
     loading = false
     if (refreshQueued) Qt.callLater(startRefresh)
+  }
+
+  // A fresh install reports every entry as "not configured yet": no tab to
+  // show, nothing to read — the settings form IS the panel's content until
+  // the first key lands. One-shot per panel lifetime; a deliberate close
+  // stays closed, and broken (as opposed to unconfigured) entries keep the
+  // status-hint flow.
+  function maybeAutoOpenSettings() {
+    if (autoSettingsDone || settingsOpen || entries.length === 0) return
+    for (var i = 0; i < entries.length; i++)
+      if (entries[i].status !== "unconfigured") return
+    autoSettingsDone = true
+    openSettings()
   }
 
   function refresh() { startRefresh() }
@@ -232,46 +261,75 @@ Panel {
     return Model.autoTextSafe(text)
   }
 
-  // The bar label as one model per Text item — each part its own object,
-  // so per-part styling is a plain color property (no rich-text CSS to
-  // fight with). Items carry {text, color, separator, role, bold}: role is
-  // "icon" / "tag" / "figure" / "sep" so BarWidget can space tile-internal
-  // parts tighter than tile boundaries; bold marks a critical figure for
-  // colorblind aid. A tile contributes its tag plus ONE part per window
-  // figure, each figure colored by its own remaining band.
+  // The bar label as one model per part — each part its own object, so
+  // per-part styling is a plain color property (no rich-text CSS to fight
+  // with). Items carry {text, color, separator, role, bold, logo, logoLabel}:
+  // role is "icon" / "tag" / "figure" / "sep" so BarWidget can space
+  // tile-internal parts tighter than tile boundaries; bold marks a critical
+  // figure for colorblind aid; `logo` is the vendor's asset id — BarWidget
+  // renders the image when the asset ships and falls back to `text`.
+  // `logoLabel` is the account suffix a NAMED account keeps beside its
+  // vendor logo. Tiles come from `Model.barTileEntries`: every working,
+  // non-exhausted account while tiling, the selected one when tiling is off.
+  //
+  // Icon policy: the module robot is the widget's ONE glyph — it never
+  // swaps to an alert mark, not even when usage is maxed to zero remaining;
+  // alarms travel through COLOR (the urgent red) and the per-figure styling,
+  // so the bar never looks like a different app when things run out.
+  // TILED mode does not show the robot at all — every tile leads with its
+  // vendor logo, which makes the icon pure redundancy; single-account mode
+  // (tiling off) is the opposite minimalism: the robot ALONE, a status
+  // indicator whose figures live in the tooltip and the click popup.
+  // Fallback states (loading, nothing tileable, vertical) keep the robot.
   function barLabelModels() {
     var items = []
-    var push = function(text, color, role, bold, separator) {
+    var push = function(text, color, role, bold, separator, logo, logoLabel) {
       items.push({ text: text, color: color, separator: separator === true,
-        role: role || "", bold: bold === true })
+        role: role || "", bold: bold === true,
+        logo: logo || "", logoLabel: logoLabel || "" })
+    }
+    var robot = function() {
+      push("󰚩", alarming ? root.urgent : root.foreground, "icon")
     }
     if (vertical) {
-      push(alarming ? "󰅙" : "󰚩", alarming ? root.urgent : root.foreground, "icon")
+      robot()
       return items
     }
     if (visibleEntries.length === 0) {
-      push(loading ? "󰚩  …" : (alarming ? "󰅙" : "󰚩"),
-        alarming ? root.urgent : root.foreground, "icon")
+      if (loading) push("󰚩  …", alarming ? root.urgent : root.foreground, "icon")
+      else robot()
       return items
     }
-    var working = []
-    for (var i = 0; i < visibleEntries.length; i++)
-      if (visibleEntries[i].status === "ready") working.push(visibleEntries[i])
+    var working = Model.barTileEntries(visibleEntries, selectedEntryId, barTiled)
     if (working.length === 0) {
-      push("󰅙", root.urgent, "icon")
+      // Nothing tileable — every account is broken, unconfigured, or
+      // exhausted. The robot stays calm unless something actually alarms:
+      // routine absence (fresh install) keeps the theme foreground.
+      robot()
       return items
     }
-    push("󰚩", alarming ? root.urgent : root.foreground, "icon")
+    if (!barTiled) {
+      // Not tiling: the robot alone — no tiles, no figures. The selected
+      // account's numbers stay one hover/click away.
+      robot()
+      return items
+    }
+    // Tiled: straight to the tiles (each leads with its vendor logo).
+    // A provider's ONLY key drops its account suffix — a lone "1" beside
+    // the logo has nothing to distinguish it from.
+    var counts = Model.providerEntryCounts(visibleEntries)
     for (var w = 0; w < working.length; w++) {
-      var parts = Model.tileParts(working[w], true, showRemaining, nowMs)
+      var solo = counts[Model.baseProvider(working[w].id)] <= 1
+      var parts = Model.tileParts(working[w], true, showRemaining, nowMs, solo)
       if (parts.length === 0) continue
-      if (items.length > 1) push("│", root.dim, "sep")
+      if (items.length > 0) push("│", root.dim, "sep")
       // The tag part is always neutral (theme foreground); only the window
       // figures carry their own remaining-band class — critical ones also
       // go bold so the alert survives color blindness.
       for (var p = 0; p < parts.length; p++)
         push(parts[p].text, root.bandColor(parts[p].cls),
-          p === 0 ? "tag" : "figure", parts[p].cls === "critical")
+          p === 0 ? "tag" : "figure", parts[p].cls === "critical",
+          false, parts[p].logo, parts[p].logoLabel)
     }
     return items
   }
@@ -469,8 +527,10 @@ Panel {
             urgent: root.urgent
             fontFamily: root.fontFamily
             showRemaining: root.showRemaining
+            barTiled: root.barTiled
             onSaved: root.startRefresh()
             onShowRemainingRequested: function(enabled) { root.setShowRemaining(enabled) }
+            onBarTiledRequested: function(enabled) { root.setBarTiled(enabled) }
             onFallbackRequested: root.openTerminalSettings()
             onCloseRequested: root.closeSettings()
           }

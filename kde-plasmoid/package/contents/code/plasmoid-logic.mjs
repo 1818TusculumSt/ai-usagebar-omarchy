@@ -21,6 +21,35 @@ export const DEFAULT_TIMEOUT_SECS = 600;
 export const MIN_TIMEOUT_SECS = 60;
 export const MAX_TIMEOUT_SECS = 3600;
 
+// Bundled logo assets under contents/logos/ — the same per-vendor SVG/PNG
+// set the Omarchy panel ships (Rust's VendorId::logo_slug owns the vendor →
+// id mapping; this table only records which files exist). Missing or future
+// ids resolve to '' and the text label stands in, never a broken image.
+export const LOGO_ASSETS = {
+    claude: 'claude.svg',
+    anthropic: 'anthropic.svg',
+    openai: 'openai.png',
+    zai: 'zai.png',
+    openrouter: 'openrouter.svg',
+    deepseek: 'deepseek.svg',
+    kimi: 'kimi.svg',
+    kilo: 'kilo.png',
+    novita: 'novita.png',
+    moonshot: 'moonshot.png',
+    grok: 'grok.png',
+    antigravity: 'antigravity.svg',
+    cursor: 'cursor.svg',
+    minimax: 'minimax.svg',
+    kiro: 'kiro.png',
+    opencode: 'opencode.svg',
+};
+
+// The bundled file name for a logo id, or '' when no asset ships.
+export function logoAssetName(slug) {
+    const id = safeText(slug, 48);
+    return Object.prototype.hasOwnProperty.call(LOGO_ASSETS, id) ? LOGO_ASSETS[id] : '';
+}
+
 // The executable data engine hands QML no handle on the child process, so the
 // applet cannot kill a hung binary: disconnectSource only stops us listening,
 // and the process keeps running — one more of them every tick. Wrapping the
@@ -173,6 +202,9 @@ function normalizeEntry(raw) {
         // display_name is the canonical label the Rust core owns. Falling back
         // to the raw id keeps a slug visible rather than an empty tab.
         label: safeText(raw.display_name, 60).trim() || safeText(raw.name, 60).trim() || id,
+        // Vendor logo asset id (Rust's VendorId::logo_slug); empty for older
+        // binaries — the text label stands in.
+        logo: safeText(raw.logo, 48),
         plan: safeText(raw.plan, 80),
         status: safeText(raw.status, 24) || 'ready',
         stale: raw.stale === true,

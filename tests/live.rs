@@ -68,6 +68,7 @@ use ai_usagebar::kimi;
 use ai_usagebar::kiro;
 use ai_usagebar::minimax;
 use ai_usagebar::openai;
+use ai_usagebar::openai_api;
 use ai_usagebar::openrouter;
 use ai_usagebar::supergrok;
 use ai_usagebar::zai;
@@ -707,5 +708,51 @@ async fn minimax_live() {
             .video_session
             .as_ref()
             .map(|w| w.utilization_pct),
+    );
+}
+
+// --- OpenAI Admin API (platform spend) --------------------------------------
+
+/// `OPENAI_ADMIN_KEY` must be an organization ADMIN key — platform.openai.com
+/// → Settings → Organization. Regular project `sk-` keys are rejected by
+/// `/v1/organization/costs` with 403, which is itself worth seeing verbatim.
+#[tokio::test]
+#[ignore = "live API smoke — see module docs"]
+async fn openai_api_live() {
+    let Ok(api_key) = std::env::var("OPENAI_ADMIN_KEY") else {
+        eprintln!("openai_api_live: OPENAI_ADMIN_KEY not set — skipping");
+        return;
+    };
+    let cache = xdg_cache_for("openai_api");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap();
+    let endpoints = openai_api::fetch::Endpoints::default();
+    let out = openai_api::fetch_snapshot(
+        &client,
+        &api_key,
+        &cache,
+        &endpoints,
+        Duration::from_secs(0),
+        None,
+    )
+    .await
+    .expect("openai-api fetch should succeed against the real Costs API");
+
+    assert!(
+        out.snapshot.spent.is_finite() && out.snapshot.spent >= 0.0,
+        "openai-api: 30-day spend is not a sane amount: {}",
+        out.snapshot.spent
+    );
+    assert!(
+        !out.snapshot.by_day.is_empty() || out.snapshot.spent == 0.0,
+        "openai-api: non-zero spend but no daily buckets — response shape changed?"
+    );
+    println!(
+        "✅ openai-api: ${:.2} over 30d · {} daily buckets · top: {:?}",
+        out.snapshot.spent,
+        out.snapshot.by_day.len(),
+        out.snapshot.top_items.first()
     );
 }

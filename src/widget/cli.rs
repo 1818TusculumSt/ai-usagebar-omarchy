@@ -265,6 +265,8 @@ pub enum Vendor {
     #[value(name = "anthropic_api")]
     AnthropicApi,
     Openai,
+    #[value(name = "openai_api")]
+    OpenaiApi,
     Zai,
     Openrouter,
     Deepseek,
@@ -292,6 +294,7 @@ impl Vendor {
             Vendor::Anthropic => crate::vendor::VendorId::Anthropic,
             Vendor::AnthropicApi => crate::vendor::VendorId::AnthropicApi,
             Vendor::Openai => crate::vendor::VendorId::Openai,
+            Vendor::OpenaiApi => crate::vendor::VendorId::OpenaiApi,
             Vendor::Zai => crate::vendor::VendorId::Zai,
             Vendor::Openrouter => crate::vendor::VendorId::Openrouter,
             Vendor::Deepseek => crate::vendor::VendorId::Deepseek,
@@ -381,6 +384,7 @@ fn id_to_vendor(id: crate::vendor::VendorId) -> Vendor {
         crate::vendor::VendorId::Anthropic => Vendor::Anthropic,
         crate::vendor::VendorId::AnthropicApi => Vendor::AnthropicApi,
         crate::vendor::VendorId::Openai => Vendor::Openai,
+        crate::vendor::VendorId::OpenaiApi => Vendor::OpenaiApi,
         crate::vendor::VendorId::Zai => Vendor::Zai,
         crate::vendor::VendorId::Openrouter => Vendor::Openrouter,
         crate::vendor::VendorId::Deepseek => Vendor::Deepseek,

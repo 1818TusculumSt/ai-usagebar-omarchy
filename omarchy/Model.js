@@ -94,9 +94,16 @@ function normalizeEntry(raw) {
     name: cleanText(raw.name, 240),
     display_name: cleanText(raw.display_name, 240),
     short_name: cleanText(raw.short_name, 24),
+    // Vendor logo asset id (`VendorId::logo_slug` in Rust). Empty for
+    // binaries older than the field — the text tag stands in.
+    logo: cleanText(raw.logo, 48),
     plan: cleanText(raw.plan, 240),
     status: status,
     error: error,
+    unconfigured: raw.unconfigured === true,
+    // Every window maxed / balance spent: the account has no capacity left
+    // right now. Bar tiles hide; tabs and popups never do.
+    exhausted: raw.exhausted === true,
     stale: raw.stale === true,
     fetched_at: cleanText(raw.fetched_at, 80),
     sections: sections
@@ -159,6 +166,32 @@ function filteredEntries(entries, configuredProvider) {
 function readyEntries(entries) {
   var list = Array.isArray(entries) ? entries : []
   return list.filter(function(entry) { return entry.status === "ready" })
+}
+
+// Bar tiles: READY accounts that still have capacity. An exhausted one
+// (any window maxed, balance spent — the Rust report's `exhausted`) leaves
+// the bar until its next report shows room again; recovery needs no state
+// because the filter runs on every refresh. Tabs and popups keep the entry.
+function barEntries(entries) {
+  var list = Array.isArray(entries) ? entries : []
+  return list.filter(function(entry) {
+    return entry.status === "ready" && entry.exhausted !== true
+  })
+}
+
+// The tile population for the bar: all of `barEntries` when tiling is on
+// (the default — the bar shows every working account side by side), or the
+// SELECTED entry alone when tiling is off (the wheel cycle and the tabs
+// stay the selector). The selected entry is skipped when it is exhausted —
+// a maxed account is not a bar tile, tiling or not.
+function barTileEntries(entries, selectedId, tiled) {
+  var working = barEntries(entries)
+  if (tiled === false) {
+    for (var i = 0; i < working.length; i++)
+      if (working[i].id === selectedId) return [working[i]]
+    return working.length > 0 ? [working[0]] : []
+  }
+  return working
 }
 
 function selectedIndex(entries, selectedId) {
@@ -228,13 +261,14 @@ function booleanSetting(value, fallback) {
 // `providerLabel` is already resolved by the caller: empty when the opt-in
 // provider switch is off, so the icon-and-value label is unchanged for everyone
 // who never turns it on. A vertical bar has no width for either field and
-// keeps showing the icon alone.
+// keeps showing the icon alone. The robot glyph never swaps to an alert
+// mark — alarms travel through the renderer's color, not the glyph.
 function barLabel(alarming, vertical, showValue, loading, hasEntry, summaryText,
                   providerLabel) {
   var icon = "󰚩"
-  if (vertical) return alarming ? "󰅙" : icon
+  if (vertical) return icon
   if (loading && !hasEntry) return icon + "  …"
-  if (!hasEntry) return alarming ? "󰅙" : icon
+  if (!hasEntry) return icon
   var provider = autoTextSafe(providerLabel).trim()
   var summary = showValue ? autoTextSafe(summaryText).trim() : ""
   if (provider === "") return summary === "" ? icon : icon + "  " + summary
@@ -316,28 +350,27 @@ function worstBand(entries) {
   return worst
 }
 
-// One-component-or-two countdown for a bar tile. Time left under a day
-// (the 5h window) shows hours + minutes; day-scale resets (the weekly
-// window) show days + hours. Zero minutes/hours are omitted so the label
-// stays compact when the component is not needed.
+// One-unit bar-tile countdown, mirroring Rust's `countdown::format_compact`:
+//   under an hour  → 42m  (whole minutes, rounded up; capped at 59m)
+//   under a day    → 5.3h (tenths of an hour; "5h" when the tenth is zero)
+//   a day or more  → 2.3d (tenths of a day; "7d" for a full week)
+// Truncated past the minutes bucket so the bar never claims more time than
+// remains. Panels and popups keep `formatDuration`'s two-component detail.
 function compactReset(resetAt, nowMs) {
   if (!resetAt) return ""
   var resetMs = new Date(String(resetAt)).getTime()
   if (!isFinite(resetMs)) return ""
   var remaining = resetMs - Number(nowMs)
   if (remaining <= 0) return "due"
-  var minutes = Math.floor(remaining / 60000)
-  var hours = Math.floor(minutes / 60)
-  var days = Math.floor(hours / 24)
-  // Under a day: hours + minutes (5h-window scale).
-  if (days === 0) {
-    var min = minutes % 60
-    if (hours === 0) return Math.max(1, minutes) + "m"
-    return min === 0 ? hours + "h" : hours + "h " + min + "m"
-  }
-  // Day scale: days + hours (weekly-window scale).
-  var hr = hours % 24
-  return hr === 0 ? days + "d" : days + "d " + hr + "h"
+  var seconds = Math.floor(remaining / 1000)
+  if (seconds < 3600) return Math.min(59, Math.ceil(seconds / 60)) + "m"
+  var subDay = seconds < 86400
+  var unitSecs = subDay ? 3600 : 86400
+  var suffix = subDay ? "h" : "d"
+  var tenths = Math.floor(seconds * 10 / unitSecs)
+  var whole = Math.floor(tenths / 10)
+  var frac = tenths % 10
+  return frac === 0 ? whole + suffix : whole + "." + frac + suffix
 }
 
 // The two windows a tile leads with: the rolling ~5h session and the weekly
@@ -358,19 +391,57 @@ function tileWindows(entry) {
   return out
 }
 
-// One account's tile as separable parts: the tag first (NEUTRAL — the key
-// name keeps the theme foreground color, never a usage range), then one
-// part per shown figure carrying its OWN class, so the 5h and weekly
-// windows render as independent Text objects with independent conditions:
-// a green 5h figure ("99% left") can sit beside an orange weekly one
-// ("13% left") instead of the whole key sharing a single color — and vice
-// versa. `showRemaining` flips percentages to what is LEFT of the window;
+// How many entries share each provider. An account's suffix exists to
+// distinguish it from its SIBLINGS — when a provider has only one key,
+// the suffix is pure noise ("zai@1" has nothing to be distinguished from),
+// so the tile degrades to exactly what a default account shows: the logo
+// alone / the provider name. Counted over the whole visible report,
+// exhausted and broken siblings included: a hidden second key still
+// exists, and when it recovers both tiles get their suffixes back.
+function providerEntryCounts(entries) {
+  var counts = {}
+  var list = Array.isArray(entries) ? entries : []
+  for (var i = 0; i < list.length; i++) {
+    var base = baseProvider(list[i].id)
+    counts[base] = (counts[base] || 0) + 1
+  }
+  return counts
+}
+
+// One account's tile as separabler parts: the tag first (NEUTRAL — the tag
+// keeps the theme foreground color, never a usage range), then one part per
+// shown figure carrying its OWN class, so the 5h and weekly windows render
+// as independent Text objects with independent conditions: a green 5h
+// figure ("99% left") can sit beside an orange weekly one ("13% left")
+// instead of the whole key sharing a single color — and vice versa.
+//
+// The tag part also carries the vendor logo asset id (`logo`). Beside a
+// rendered logo only a NAMED account still needs its distinguishing text
+// (`logoLabel` — the account suffix); a default account is the logo alone.
+// `solo === true` (the provider's only entry) extends that to named
+// accounts: no suffix, and the text fallback becomes the provider name.
+// `text` stays the full tag so a frontend without the asset (or a binary
+// older than the field) falls back to exactly the old tile.
+// `showRemaining` flips percentages to what is LEFT of the window;
 // `showValue` off degrades every tile to its tag. Balance-style accounts
 // (no windows) keep the single headline figure.
-function tileParts(entry, showValue, showRemaining, nowMs) {
+function tileParts(entry, showValue, showRemaining, nowMs, solo) {
   if (!entry) return []
   var tag = tileTag(entry)
-  var tagPart = tag === "" ? null : { text: tag, cls: "" }
+  var logo = entry && entry.logo ? cleanText(entry.logo, 48) : ""
+  var id = String((entry && entry.id) || "")
+  var at = id.indexOf("@")
+  var logoLabel = at >= 0 && at + 1 < id.length
+    ? autoTextSafe(id.slice(at + 1)).trim() : ""
+  var tagPart
+  if (solo === true) {
+    // The provider's only key: the logo/name identifies it completely.
+    var base = autoTextSafe(baseProvider(entry.id)).trim()
+    tagPart = tag === "" ? null : { text: base, cls: "", logo: logo, logoLabel: "" }
+  } else {
+    tagPart = tag === "" ? null
+      : { text: tag, cls: "", logo: logo, logoLabel: logoLabel }
+  }
   if (!showValue) return tagPart ? [tagPart] : []
   var windows = tileWindows(entry)
   var parts = []
@@ -401,33 +472,39 @@ function tileParts(entry, showValue, showRemaining, nowMs) {
 
 // The same tile as one plain string — the joined form of `tileParts` for
 // single-label consumers (`tiledBarLabel`).
-function tileLabel(entry, showValue, showRemaining, nowMs) {
-  var parts = tileParts(entry, showValue, showRemaining, nowMs)
+function tileLabel(entry, showValue, showRemaining, nowMs, solo) {
+  var parts = tileParts(entry, showValue, showRemaining, nowMs, solo)
   var texts = []
   for (var i = 0; i < parts.length; i++) texts.push(parts[i].text)
   return texts.join(" ")
 }
 
-// The tiled bar: every WORKING account side by side, the presentation the
-// old GNOME panel used (`key1 42% 4h │ key2 80% 1d`). Misconfigured entries
-// (no key, broken config) stay off the bar — the click popup keeps their
-// rows and remedies; when every account is broken the bar shows the alert
-// icon alone so the panel is where it gets fixed.
+// The tiled bar: every WORKING, non-exhausted account side by side, the
+// presentation the old GNOME panel used (`key1 42% 5.3h│key2 80% 1d`) —
+// and NO module icon in front: every tile leads with its vendor logo, so
+// the robot would be pure redundancy (single-account mode is the one that
+// is icon-only). The separator carries no padding spaces — the divider
+// glyph has whitespace of its own. Misconfigured entries (no key, broken
+// config) and exhausted ones (every window maxed, balance spent) stay off
+// the bar — the click popup keeps their rows and remedies. The robot glyph
+// never swaps to an alert mark; the rendered bar signals alarms by COLOR.
 function tiledBarLabel(alarming, vertical, showValue, loading, entries,
                        showRemaining, nowMs) {
   var icon = "󰚩"
   var all = Array.isArray(entries) ? entries : []
-  var working = all.filter(function(entry) { return entry.status === "ready" })
-  if (vertical) return alarming ? "󰅙" : icon
-  if (all.length === 0) return loading ? icon + "  …" : (alarming ? "󰅙" : icon)
-  if (working.length === 0) return "󰅙"
+  var working = barEntries(all)
+  if (vertical) return icon
+  if (all.length === 0) return loading ? icon + "  …" : icon
+  if (working.length === 0) return icon
+  var counts = providerEntryCounts(all)
   var parts = []
   for (var i = 0; i < working.length; i++) {
-    var tile = tileLabel(working[i], showValue, showRemaining, nowMs)
+    var solo = counts[baseProvider(working[i].id)] <= 1
+    var tile = tileLabel(working[i], showValue, showRemaining, nowMs, solo)
     if (tile !== "") parts.push(tile)
   }
   if (parts.length === 0) return icon
-  return icon + "  " + parts.join("  │  ")
+  return parts.join("│")
 }
 
 function headline(entry) {
@@ -541,6 +618,38 @@ function launchErrorMessage(exitCode, stderrText) {
   return errorMessage(stderrText)
 }
 
+// Bundled logo assets — one SVG per asset id under omarchy/logos/. Rust owns
+// the vendor → id mapping (`VendorId::logo_slug`, shipped as each entry's
+// `logo`); this table only records which files actually ship, so a missing
+// or future asset degrades to the text tag instead of a broken image in a
+// long-lived bar process. Keys mirror the Rust slugs; keep both in lockstep
+// (the contract test walks every vendor id against it).
+var LOGO_ASSETS = {
+  claude: "claude.svg",
+  anthropic: "anthropic.svg",
+  openai: "openai.png",
+  zai: "zai.png",
+  openrouter: "openrouter.svg",
+  deepseek: "deepseek.svg",
+  kimi: "kimi.svg",
+  kilo: "kilo.png",
+  novita: "novita.png",
+  moonshot: "moonshot.png",
+  grok: "grok.png",
+  antigravity: "antigravity.svg",
+  cursor: "cursor.svg",
+  minimax: "minimax.svg",
+  kiro: "kiro.png",
+  opencode: "opencode.svg"
+}
+
+// The bundled file name for a logo id, or "" when no asset ships.
+function logoAssetName(slug) {
+  var id = cleanText(slug, 48)
+  return Object.prototype.hasOwnProperty.call(LOGO_ASSETS, id)
+    ? LOGO_ASSETS[id] : ""
+}
+
 function settingsId(value) {
   var id = cleanText(value, 80).trim()
   if (!/^[a-z0-9_-]+$/.test(id)
@@ -590,9 +699,10 @@ function normalizeField(raw) {
   }
 }
 
-// One account of a multi-account vendor (Z.AI today): a labeled bundle of
-// fields plus key-presence booleans. label "" is the vendor's default
-// section.
+// One account of a multi-account vendor (every key-based provider): a
+// labeled bundle of fields plus key-presence booleans. label "" is the
+// vendor's default section. `vendor_display` is Rust's canonical provider
+// name — the settings form's group titles and Add buttons render it.
 function normalizeAccount(raw) {
   if (!raw || typeof raw !== "object") return null
   var vendor = settingsId(raw.vendor)
@@ -606,6 +716,7 @@ function normalizeAccount(raw) {
   }
   return {
     vendor: vendor,
+    vendor_display: cleanText(raw.vendor_display, 120) || vendor,
     label: label,
     display: cleanText(raw.display, 120) || (label === "" ? "Default" : label),
     environment: cleanText(raw.environment, 160),
@@ -740,12 +851,15 @@ function buildSettingsPatch(primary, changes, accountChanges) {
         return { ok: false, error: "An account change is missing its label.", payload: "" }
       mutation.label = cleanText(change.label, 120)
     } else if (change.action === "add") {
+      // The form no longer asks for a name: an omitted name means the
+      // server auto-names the account (Z.AI, Z.AI 2 …). An explicit one is
+      // still accepted for older callers.
       var name = String(change.name || "").trim()
-      if (name === "")
-        return { ok: false, error: "A new account needs a name.", payload: "" }
-      if (name.length > 120)
-        return { ok: false, error: "An account name is too long.", payload: "" }
-      mutation.name = name
+      if (name !== "") {
+        if (name.length > 120)
+          return { ok: false, error: "An account name is too long.", payload: "" }
+        mutation.name = name
+      }
     } else {
       return { ok: false, error: "An account change has an invalid action.", payload: "" }
     }
