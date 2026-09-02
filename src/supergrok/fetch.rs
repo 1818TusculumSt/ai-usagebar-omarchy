@@ -31,29 +31,23 @@ pub async fn fetch_snapshot(
     cache: &Cache,
     cache_ttl: Duration,
 ) -> Result<FetchOutcome> {
-    // Try ACP first; fall back to REST when the CLI lacks the billing extension.
-    match fetch_snapshot_with(
+    // Try the ACP extension first; on older Grok Build CLIs that lack it,
+    // fall back to the REST billing endpoint. The fallback lives inside the
+    // fetch closure so an ACP miss never enters the stale-cache path below
+    // (that would surface the ACP error and pause on otherwise-good data).
+    fetch_snapshot_with(
         cache,
         cache_ttl,
         Utc::now(),
         || scope::fingerprint(scope_paths),
-        || acp::fetch_billing(grok_binary),
+        || async {
+            match acp::fetch_billing(grok_binary).await {
+                Err(AppError::AcpUnsupported) => rest::fetch_billing(&scope_paths.auth).await,
+                other => other,
+            }
+        },
     )
     .await
-    {
-        Err(AppError::AcpUnsupported) => {
-            // ACP not available — try the REST API fallback.
-            fetch_snapshot_with(
-                cache,
-                cache_ttl,
-                Utc::now(),
-                || scope::fingerprint(scope_paths),
-                || rest::fetch_billing(&scope_paths.auth),
-            )
-            .await
-        }
-        other => other,
-    }
 }
 
 async fn fetch_snapshot_with<S, F, Fut>(
