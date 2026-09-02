@@ -12,7 +12,7 @@ use crate::error::{AppError, Result};
 use crate::usage::{SuperGrokPeriod, SuperGrokSnapshot};
 
 use super::scope::ScopePaths;
-use super::{acp, scope, types};
+use super::{acp, rest, scope, types};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(15);
 const CACHE_SCHEMA: u8 = 2;
@@ -31,7 +31,8 @@ pub async fn fetch_snapshot(
     cache: &Cache,
     cache_ttl: Duration,
 ) -> Result<FetchOutcome> {
-    fetch_snapshot_with(
+    // Try ACP first; fall back to REST when the CLI lacks the billing extension.
+    match fetch_snapshot_with(
         cache,
         cache_ttl,
         Utc::now(),
@@ -39,6 +40,20 @@ pub async fn fetch_snapshot(
         || acp::fetch_billing(grok_binary),
     )
     .await
+    {
+        Err(AppError::AcpUnsupported) => {
+            // ACP not available — try the REST API fallback.
+            fetch_snapshot_with(
+                cache,
+                cache_ttl,
+                Utc::now(),
+                || scope::fingerprint(scope_paths),
+                || rest::fetch_billing(&scope_paths.auth),
+            )
+            .await
+        }
+        other => other,
+    }
 }
 
 async fn fetch_snapshot_with<S, F, Fut>(

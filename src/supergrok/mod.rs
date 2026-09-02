@@ -12,6 +12,7 @@
 
 pub mod acp;
 pub mod fetch;
+pub mod rest;
 pub mod scope;
 pub mod types;
 pub mod vendor;

@@ -174,7 +174,8 @@ async fn read_result<R: AsyncRead + Unpin>(
 fn map_rpc_error(error: &Value, stage: RpcStage) -> AppError {
     let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
     match (stage, code) {
-        (RpcStage::Initialize, _) | (_, -32601) => AppError::Credentials(
+        (_, -32601) => AppError::AcpUnsupported,
+        (RpcStage::Initialize, _) => AppError::Credentials(
             "configured grok binary does not support the Grok Build x.ai/billing ACP method; install or select the official current CLI"
                 .into(),
         ),

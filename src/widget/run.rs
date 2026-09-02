@@ -1063,6 +1063,9 @@ fn fallback(err: &AppError, _cli: &Cli) -> WaybarOutput {
         AppError::Json(e) => format!("JSON error: {e}"),
         AppError::Toml(e) => format!("TOML error: {e}"),
         AppError::IoBare(e) => format!("I/O error: {e}"),
+        AppError::AcpUnsupported => {
+            "Grok Build ACP billing extension not available".into()
+        }
     };
     // Tooltips are Pango markup. Escape error text before serializing it so an
     // error cannot inject markup; serde still produces valid one-line JSON.

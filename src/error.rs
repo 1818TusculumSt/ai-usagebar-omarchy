@@ -66,6 +66,11 @@ pub enum AppError {
     #[error("toml error: {0}")]
     Toml(#[from] toml::de::Error),
 
+    /// Grok Build's ACP process does not expose the `x.ai/billing` extension.
+    /// Signals that the caller should fall back to the REST API.
+    #[error("Grok Build ACP billing extension not available")]
+    AcpUnsupported,
+
     /// Catch-all for unexpected conditions (cache lock contention, etc.).
     #[error("{0}")]
     Other(String),
