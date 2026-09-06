@@ -2,7 +2,6 @@ import QtQuick
 import Quickshell
 import qs.Commons
 import qs.Ui
-import "Model.js" as Model
 
 // Quattro bar entry point. The popup is loaded separately so the object in
 // the bar slot owns shell routing while Panel.qml remains focused on report
@@ -106,18 +105,9 @@ BarWidget {
     }
   }
 
-  // Semi-transparent backdrop: on a transparent bar the tiles float over
-  // the wallpaper — light or busy backgrounds can wash the text out. A
-  // theme-colored translucent plate keeps every tile legible regardless.
-  Rectangle {
-    anchors.fill: labelRow
-    anchors.margins: -3
-    radius: Style.space(4)
-    color: Util.alpha(Color.background, 0.62)
-    border.width: 1
-    border.color: Util.alpha(Color.foreground, 0.14)
-    visible: labelRow.visible
-  }
+  // No backdrop plate: the bar text color is wallpaper-aware
+  // (bar.barForeground), so tiles stay legible on any wallpaper with no
+  // pill behind them — just a plain glyph like every other widget.
 
   // Vertical bars have no width for figures: a small band-colored dot under
   // the icon carries the worst usage state (errors already turn the icon
@@ -134,10 +124,11 @@ BarWidget {
     anchors.bottomMargin: 3
   }
 
-  // One part per tile — the vendor LOGO (plus a named account's suffix),
-  // or a Text fallback when no asset ships / the report predates the field.
-  // Each window figure keeps its own Text with its own remaining-band
-  // color; no shared rich-text label whose spans can be dropped wholesale.
+  // One part per tile — plain provider text in the bar foreground, like
+  // every other widget. Brand logo assets stay out of the bar (they carry
+  // their own vendor colors); the full tag text stands in instead.
+  // Each window figure keeps its own Text with the monochrome bar color;
+  // no shared rich-text label whose spans can be dropped wholesale.
   // Tile boundaries (the │ separators) carry almost no padding — the
   // divider glyph has whitespace of its own — while intra-tile gaps
   // (sep > tag > figure) keep tiles reading as groups.
@@ -155,43 +146,18 @@ BarWidget {
       Item {
         id: tilePart
         required property var modelData
-        readonly property string logo: modelData.logo !== undefined ? String(modelData.logo) : ""
-        readonly property string logoLabel: modelData.logoLabel !== undefined
-          ? String(modelData.logoLabel) : ""
-        // Only the tag part can be a logo; figures and separators are text.
-        readonly property bool showLogo: role === "tag"
-          && Model.logoAssetName(logo) !== ""
         readonly property string role: String(modelData.role || "")
-        readonly property string textWhenNoLogo: String(modelData.text || "")
+        // Plain provider/account text — no brand logos in the bar, so every
+        // tile reads in the bar foreground like the rest of the widgets.
+        readonly property string text: String(modelData.text || "")
         readonly property int leftPad: role === "sep" ? 2
           : role === "tag" ? 6
           : role === "figure" ? 4 : 0
         readonly property int rightPad: role === "sep" ? 2 : 0
-        // The text beside a logo is the account suffix (named accounts
-        // only); without a logo the full tag text stands in.
-        readonly property string text: showLogo ? logoLabel : textWhenNoLogo
         implicitWidth: leftPad + rightPad
-          + (showLogo ? logoImage.width + (logoLabel !== "" ? 3 : 0) : 0)
           + (text !== "" ? partText.implicitWidth : 0)
-        implicitHeight: Math.max(logoImage.height, partText.implicitHeight)
+        implicitHeight: partText.implicitHeight
         anchors.verticalCenter: parent.verticalCenter
-
-        Image {
-          id: logoImage
-          visible: tilePart.showLogo
-          source: tilePart.showLogo
-            ? Qt.resolvedUrl("logos/" + Model.logoAssetName(tilePart.logo)) : ""
-          // Sized against the bar's body text so the mark reads as part of
-          // the label, not an icon bolted on.
-          height: Style.font.bodySmall
-          width: height
-          sourceSize.width: height
-          sourceSize.height: height
-          fillMode: Image.PreserveAspectFit
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.left: parent.left
-          asynchronous: true
-        }
 
         Text {
           id: partText
@@ -204,10 +170,6 @@ BarWidget {
           font.bold: modelData.bold === true
           renderType: Text.NativeRendering
           anchors.verticalCenter: parent.verticalCenter
-          // Right of the logo when both render (named accounts); at the
-          // item origin otherwise (no logo, or logo-only default accounts).
-          x: tilePart.showLogo && tilePart.logoLabel !== ""
-            ? logoImage.width + 3 : 0
         }
       }
     }

@@ -17,7 +17,11 @@ Panel {
   property var hostWidget: null
   readonly property var barIdentity: hostWidget || root
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
+  // bar.barForeground is the wallpaper-aware bar text color (the bar samples
+  // the wallpaper on transparent bars and goes dark over light ones).
+  // bar.foreground is the static theme cream — using it here left the icon
+  // glowing light while every other bar glyph went dark.
+  readonly property color foreground: bar && bar.barForeground ? bar.barForeground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.45)
   // Quota range colors (One Dark family; the palette ships none of them).
@@ -34,6 +38,14 @@ Panel {
     if (band === "high") return root.quotaOrange
     if (band === "mid") return root.quotaYellow
     if (band === "low") return root.quotaGreen
+    return root.foreground
+  }
+
+  // Bar-only color: the bar stays monochrome like every other widget —
+  // plain foreground, urgent red only when something is actually critical.
+  // The popup keeps the full band palette where there is room to read it.
+  function barFigureColor(band) {
+    if (band === "critical") return root.urgent
     return root.foreground
   }
 
@@ -323,11 +335,11 @@ Panel {
       var parts = Model.tileParts(working[w], true, showRemaining, nowMs, solo)
       if (parts.length === 0) continue
       if (items.length > 0) push("│", root.dim, "sep")
-      // The tag part is always neutral (theme foreground); only the window
-      // figures carry their own remaining-band class — critical ones also
-      // go bold so the alert survives color blindness.
+      // The bar stays monochrome: tags and figures all render in the bar
+      // foreground — critical figures also go bold (and urgent red) so the
+      // alert survives color blindness.
       for (var p = 0; p < parts.length; p++)
-        push(parts[p].text, root.bandColor(parts[p].cls),
+        push(parts[p].text, p === 0 ? root.foreground : root.barFigureColor(parts[p].cls),
           p === 0 ? "tag" : "figure", parts[p].cls === "critical",
           false, parts[p].logo, parts[p].logoLabel)
     }
