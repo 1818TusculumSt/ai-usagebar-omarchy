@@ -166,6 +166,7 @@ function filteredEntries(entries, configuredProvider) {
 function readyEntries(entries) {
   var list = Array.isArray(entries) ? entries : []
   return list.filter(function(entry) { return entry.status === "ready" })
+    .sort(function(a, b) { return providerName(a).localeCompare(providerName(b)) })
 }
 
 // Bar tiles: READY accounts that still have capacity. An exhausted one

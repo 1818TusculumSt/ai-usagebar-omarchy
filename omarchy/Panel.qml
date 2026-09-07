@@ -547,38 +547,48 @@ Panel {
             onCloseRequested: root.closeSettings()
           }
 
-          ListView {
+          Flow {
             id: providerList
             visible: !root.settingsOpen && root.tabEntries.length > 1
             width: parent.width
-            height: visible ? Style.spacing.controlHeight : 0
-            orientation: ListView.Horizontal
             spacing: Style.spacing.md
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            model: root.tabEntries
 
-            delegate: Button {
-              required property var modelData
-              required property int index
+            // A horizontally-scrolling ListView hid overflow tabs behind a
+            // scroll nobody knew to do — with enough providers, tabs past
+            // the panel's fixed width just read as cut off. Flow wraps
+            // overflow onto a new line instead: the panel grows taller
+            // (the outer Flickable already scrolls vertically), but every
+            // tab's full name is always visible with no hidden scroll.
+            Repeater {
+              model: root.tabEntries
 
-              height: providerList.height
-              text: Model.providerName(modelData)
-              // `tabIndexOfSelected` is -1 exactly when the selected entry
-              // has no tab (unconfigured/broken) — highlight nothing then.
-              selected: root.tabIndexOfSelected >= 0 && index === root.tabIndexOfSelected
-              hasCursor: root.cursorActive && root.tabIndexOfSelected >= 0
-                && index === root.tabIndexOfSelected
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              fontSize: Style.font.bodySmall
-              verticalPadding: Style.spacing.controlPaddingY
-              onClicked: {
-                root.cursorActive = true
-                root.selectEntryById(modelData.id)
+              Button {
+                required property var modelData
+                required property int index
+
+                // Flow positions children by their actual width, not
+                // implicitWidth (Button, like every Rectangle-based item,
+                // never auto-binds the two) — without this every tab
+                // measures as 0-wide and Flow can't wrap correctly.
+                width: implicitWidth
+                height: Style.spacing.controlHeight
+                text: Model.providerName(modelData)
+                // `tabIndexOfSelected` is -1 exactly when the selected entry
+                // has no tab (unconfigured/broken) — highlight nothing then.
+                selected: root.tabIndexOfSelected >= 0 && index === root.tabIndexOfSelected
+                hasCursor: root.cursorActive && root.tabIndexOfSelected >= 0
+                  && index === root.tabIndexOfSelected
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.bodySmall
+                verticalPadding: Style.spacing.controlPaddingY
+                onClicked: {
+                  root.cursorActive = true
+                  root.selectEntryById(modelData.id)
+                }
+                onHovered: function(isHovered) { if (isHovered) root.cursorActive = true }
               }
-              onHovered: function(isHovered) { if (isHovered) root.cursorActive = true }
             }
           }
 

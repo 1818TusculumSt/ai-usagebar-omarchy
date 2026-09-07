@@ -157,6 +157,13 @@ BarWidget {
         implicitWidth: leftPad + rightPad
           + (text !== "" ? partText.implicitWidth : 0)
         implicitHeight: partText.implicitHeight
+        // Row positions children by their actual width/height, not
+        // implicitWidth/implicitHeight — without this binding every tile
+        // part measures as 0-wide, so labelRow (and BarWidget.implicitWidth,
+        // and the bar's ModuleSlot that sizes off it) undercounts the real
+        // content and the rightmost tiles run past the reserved slot.
+        width: implicitWidth
+        height: implicitHeight
         anchors.verticalCenter: parent.verticalCenter
 
         Text {
