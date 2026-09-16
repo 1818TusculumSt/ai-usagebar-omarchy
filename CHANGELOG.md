@@ -7,6 +7,41 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release is also published at
 <https://github.com/KyleLee/ai-usagebar-omarchy/releases>.
 
+## [Unreleased]
+
+### Added
+
+- **GitHub Copilot vendor** (`cpl`). Reports the premium-request pool from
+  `api.github.com/copilot_internal/user` — the endpoint the editor extensions
+  read for their own quota meter, since no supported public API exposes an
+  individual seat's premium-request balance. Shows used/entitlement percent,
+  remaining count, plan name, and cycle reset; unlimited pools render as `∞`
+  and never read as exhausted. Counts stay fractional (a premium request can
+  cost less than one whole unit), so the tooltip reports `198.6 left`, not
+  `198`. No token is minted: an existing one is reused in the official Copilot
+  CLI's own order — `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, then
+  `gh`'s credential store. Classic PATs (`ghp_`) are refused with an
+  actionable message instead of an opaque 401, and any failure names the
+  *source* of the token, never the token.
+- **Provider enable/disable toggles in the settings form.** `settings show`
+  now emits every vendor with its `credential` kind (`login` / `key` /
+  `none`), `settings apply` accepts a `vendors` map, and the Omarchy panel
+  renders a `PROVIDERS` section. This is the first way to opt in a vendor that
+  has no API key to paste — Copilot, Cursor, Kiro, SuperGrok, Antigravity —
+  which previously required hand-editing `config.toml`. Only toggles actually
+  flipped are written, so a save never stamps `enabled` across the whole
+  roster, and a vendor enabled in the same save may be chosen as primary
+  without a second round-trip.
+
+### Fixed
+
+- Four stale assertions in `omarchy/model.test.mjs` left behind by the
+  monochrome bar-tile rework: three asserted `BarWidget.qml` still imports
+  `Model.js` and resolves logo assets (brand logos were deliberately dropped
+  from the bar), and one pinned incidental tab ordering while claiming to test
+  that exhausted accounts survive into the tabs. `logoAssetName` itself stays
+  covered — the KDE plasmoid still renders logos with it.
+
 ## [1.9.0] — 2026-08-30
 
 ### Added
