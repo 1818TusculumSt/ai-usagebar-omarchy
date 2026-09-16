@@ -280,6 +280,20 @@ pub struct SettingsState {
     pub zai: ZaiFields,
     /// One-line status displayed in the footer ("saved …", "save failed …").
     pub status: String,
+    /// Desired `enabled` for every vendor, in [`VendorId::all`] order. Only
+    /// entries the caller actually touched are written, so a save never
+    /// materialises an `enabled = false` for a vendor the user never opened.
+    pub vendor_enabled: Vec<VendorEnabledInput>,
+}
+
+/// One vendor's enable toggle. `dirty` is what separates "left alone" from
+/// "explicitly set to the value it already had" — only a dirty entry reaches
+/// config.toml.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VendorEnabledInput {
+    pub id: VendorId,
+    pub value: bool,
+    pub dirty: bool,
 }
 
 /// The editable, non-secret Z.AI fields — what the old GNOME panel exposed
@@ -338,7 +352,34 @@ impl SettingsState {
             keys,
             zai: ZaiFields::from_config(cfg),
             status: String::new(),
+            vendor_enabled: VendorId::all()
+                .iter()
+                .map(|id| VendorEnabledInput {
+                    id: *id,
+                    value: cfg.is_enabled(*id),
+                    dirty: false,
+                })
+                .collect(),
         }
+    }
+
+    /// Vendors this state considers enabled, toggles included — the primary
+    /// selector's choices must follow a toggle made in the same save, or
+    /// enabling a vendor and selecting it as primary would need two saves.
+    fn enabled_after_toggles(&self) -> Vec<VendorId> {
+        VendorId::all()
+            .iter()
+            .copied()
+            .filter(|id| {
+                match self.vendor_enabled.iter().find(|v| v.id == *id) {
+                    // Only a toggle the caller actually set overrides the
+                    // state's existing view; an untouched one carries no
+                    // information and must not vote.
+                    Some(toggle) if toggle.dirty => toggle.value,
+                    _ => self.primary_choices.contains(id),
+                }
+            })
+            .collect()
     }
 
     /// The focused key input, if a key row is focused.
@@ -512,9 +553,16 @@ pub fn save_to_path(state: &SettingsState, path: &Path) -> Result<()> {
 
     // Do not write a disabled primary as a side effect of saving an API key.
     // With no enabled vendors, leave any existing value alone so the legacy
-    // resolver's Anthropic fallback remains intact.
-    if state.primary_choices.contains(&state.primary) {
+    // resolver's Anthropic fallback remains intact. Toggles count here: a
+    // vendor enabled in this same save is a legitimate primary.
+    if state.enabled_after_toggles().contains(&state.primary) {
         set_string(&mut doc, "ui", "primary", state.primary.slug())?;
+    }
+
+    // Toggles first: a key written below opts its vendor in, and that implicit
+    // enable must win over a stale `false` carried in an untouched toggle.
+    for toggle in state.vendor_enabled.iter().filter(|v| v.dirty) {
+        set_bool(&mut doc, toggle.id.slug(), "enabled", toggle.value)?;
     }
 
     for (i, kv) in KEY_VENDORS.iter().enumerate() {
@@ -644,6 +692,39 @@ struct SettingsSnapshot {
     /// here, one entry per configured account plus the default section.
     #[serde(default)]
     accounts: Vec<AccountStatus>,
+    /// Every vendor's on/off state, in canonical order. Additive on schema 1.
+    /// This is the whole roster, not just the key vendors: a frontend needs it
+    /// to offer a toggle for the ones with no key to paste.
+    #[serde(default)]
+    vendors: Vec<VendorToggleStatus>,
+}
+
+/// One vendor's enable toggle as the settings form sees it.
+#[derive(Debug, Serialize)]
+struct VendorToggleStatus {
+    /// Machine vendor id — the key to send back in the patch's `vendors` map.
+    id: String,
+    /// Rust-owned display name, so no frontend keeps a vendor-name table.
+    label: String,
+    enabled: bool,
+    /// How this vendor authenticates, for the line under the toggle. Vendors
+    /// with no key to paste are exactly the ones this toggle exists for.
+    credential: &'static str,
+}
+
+/// What a vendor needs before it can fetch — `key` is pasted on this same
+/// page, `login` comes from another program's session, `none` needs nothing.
+const fn credential_kind(id: VendorId) -> &'static str {
+    match id {
+        VendorId::Anthropic
+        | VendorId::Openai
+        | VendorId::Supergrok
+        | VendorId::Cursor
+        | VendorId::Kiro
+        | VendorId::Copilot => "login",
+        VendorId::Antigravity => "none",
+        _ => "key",
+    }
 }
 
 /// One Z.AI account: the `[zai]` default section (`label: ""`) or one
@@ -865,6 +946,13 @@ struct ApplyRequest {
     /// Per-vendor account-list mutations (Z.AI today), composed with `keys`.
     #[serde(default)]
     accounts: BTreeMap<String, Vec<AccountMutation>>,
+    /// Per-vendor `enabled` toggles, keyed by vendor slug. Additive on schema
+    /// 1: an older frontend simply never sends the map. This is the only way
+    /// to opt in a vendor that has no API key to paste — Copilot, Cursor,
+    /// Kiro, SuperGrok, Antigravity — which previously required hand-editing
+    /// config.toml.
+    #[serde(default)]
+    vendors: BTreeMap<String, bool>,
 }
 
 /// One account mutation. `label` addresses an account by its POSITION
@@ -1030,6 +1118,16 @@ fn snapshot_from_config_with(
                 key_account_cards(spec, cfg, &environment_configured)
             }))
             .collect(),
+        vendors: state
+            .vendor_enabled
+            .iter()
+            .map(|toggle| VendorToggleStatus {
+                id: toggle.id.slug().to_string(),
+                label: toggle.id.display_name().to_string(),
+                enabled: toggle.value,
+                credential: credential_kind(toggle.id),
+            })
+            .collect(),
     }
 }
 
@@ -1187,10 +1285,24 @@ fn state_from_apply_request(cfg: &Config, raw: &str) -> Result<SettingsState> {
     }
 
     let mut state = SettingsState::from_config(cfg);
+
+    // Before `primary`: enabling a vendor and making it primary is one save.
+    for (slug, enabled) in request.vendors {
+        let id = vendor_from_slug(&slug)
+            .ok_or_else(|| AppError::Other(format!("unknown vendor {slug:?}")))?;
+        let toggle = state
+            .vendor_enabled
+            .iter_mut()
+            .find(|toggle| toggle.id == id)
+            .ok_or_else(|| AppError::Other(format!("unknown vendor {slug:?}")))?;
+        toggle.value = enabled;
+        toggle.dirty = true;
+    }
+
     if let Some(primary) = request.primary {
         let id = vendor_from_slug(&primary)
             .ok_or_else(|| AppError::Other(format!("unknown primary vendor {primary:?}")))?;
-        if !state.primary_choices.contains(&id) {
+        if !state.enabled_after_toggles().contains(&id) {
             return Err(AppError::Other(format!(
                 "primary vendor {primary:?} is not enabled"
             )));
@@ -2521,6 +2633,16 @@ mod tests {
             keys: KEY_VENDORS.iter().map(|_| KeyInput::default()).collect(),
             zai: ZaiFields::default(),
             status: String::new(),
+            // Untouched: a blank state writes no `enabled` of its own, so the
+            // existing key-write assertions stay about keys only.
+            vendor_enabled: VendorId::all()
+                .iter()
+                .map(|id| VendorEnabledInput {
+                    id: *id,
+                    value: true,
+                    dirty: false,
+                })
+                .collect(),
         }
     }
 
@@ -2836,6 +2958,127 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         assert!(!raw.contains("primary = \"grok\""));
         // The keys still saved.
         assert!(raw.contains("zk"));
+    }
+
+    fn set_toggle(state: &mut SettingsState, id: VendorId, value: bool) {
+        let toggle = state
+            .vendor_enabled
+            .iter_mut()
+            .find(|toggle| toggle.id == id)
+            .unwrap();
+        toggle.value = value;
+        toggle.dirty = true;
+    }
+
+    /// The whole point of the feature: a vendor with no key to paste had no
+    /// way into config.toml except a hand edit.
+    #[test]
+    fn a_keyless_vendor_can_be_enabled_without_an_api_key() {
+        let (_dir, path) = temp_config(None);
+        let mut s = blank_state(VendorId::Anthropic);
+        set_toggle(&mut s, VendorId::Copilot, true);
+        save_to_path(&s, &path).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("[copilot]"), "{raw}");
+        assert!(raw.contains("enabled = true"), "{raw}");
+        assert!(!raw.contains("api_key"), "{raw}");
+    }
+
+    #[test]
+    fn a_toggle_can_turn_a_vendor_off_again() {
+        let (_dir, path) = temp_config(Some("[cursor]\nenabled = true\n"));
+        let mut s = blank_state(VendorId::Anthropic);
+        set_toggle(&mut s, VendorId::Cursor, false);
+        save_to_path(&s, &path).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("enabled = false")
+        );
+    }
+
+    /// An untouched toggle must not materialise a section, or one save would
+    /// write `enabled = false` for all nineteen vendors.
+    #[test]
+    fn untouched_toggles_write_nothing() {
+        let (_dir, path) = temp_config(None);
+        let s = blank_state(VendorId::Anthropic);
+        save_to_path(&s, &path).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("[copilot]"), "{raw}");
+        assert!(!raw.contains("[cursor]"), "{raw}");
+    }
+
+    /// Enabling a vendor and selecting it as primary has to be ONE save, or
+    /// the form would need a save, a reload, and a second save.
+    #[test]
+    fn a_vendor_enabled_in_this_save_may_become_primary() {
+        let (_dir, path) = temp_config(None);
+        let mut s = blank_state(VendorId::Copilot);
+        s.primary_choices = vec![VendorId::Anthropic];
+        set_toggle(&mut s, VendorId::Copilot, true);
+        save_to_path(&s, &path).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("primary = \"copilot\"")
+        );
+    }
+
+    #[test]
+    fn apply_patch_toggles_vendors_and_rejects_unknown_ones() {
+        let cfg = Config::default();
+        let state = state_from_apply_request(
+            &cfg,
+            r#"{"schema_version":1,"vendors":{"copilot":true,"cursor":false}}"#,
+        )
+        .unwrap();
+        let toggle = |id: VendorId| {
+            state
+                .vendor_enabled
+                .iter()
+                .find(|toggle| toggle.id == id)
+                .unwrap()
+        };
+        assert!(toggle(VendorId::Copilot).value && toggle(VendorId::Copilot).dirty);
+        assert!(!toggle(VendorId::Cursor).value && toggle(VendorId::Cursor).dirty);
+        // Everything the patch left out stays untouched.
+        assert!(!toggle(VendorId::Grok).dirty);
+
+        let error = state_from_apply_request(
+            &cfg,
+            r#"{"schema_version":1,"vendors":{"not-a-vendor":true}}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("unknown vendor"), "{error}");
+    }
+
+    /// The form needs the full roster, including the vendors that have no key
+    /// card, or the keyless ones stay invisible.
+    #[test]
+    fn settings_show_lists_every_vendor_with_its_credential_kind() {
+        let cfg = Config::default();
+        let snapshot = snapshot_from_config_with(&cfg, |_| false);
+        let json = serde_json::to_value(&snapshot).unwrap();
+        let vendors = json["vendors"].as_array().unwrap();
+        assert_eq!(vendors.len(), VendorId::all().len());
+
+        let copilot = vendors
+            .iter()
+            .find(|v| v["id"] == "copilot")
+            .expect("copilot must be offered a toggle");
+        assert_eq!(copilot["label"], "GitHub Copilot");
+        assert_eq!(copilot["credential"], "login");
+        assert_eq!(copilot["enabled"], false);
+        assert_eq!(
+            vendors.iter().find(|v| v["id"] == "zai").unwrap()["credential"],
+            "key"
+        );
+        assert_eq!(
+            vendors.iter().find(|v| v["id"] == "antigravity").unwrap()["credential"],
+            "none"
+        );
     }
 
     #[test]

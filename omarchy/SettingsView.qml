@@ -18,7 +18,11 @@ Column {
   property bool barTiled: true
   readonly property color dim: Qt.darker(foreground, 1.45)
 
-  property var snapshot: ({ primary_choices: [], keys: [], accounts: [] })
+  property var snapshot: ({ primary_choices: [], keys: [], accounts: [], vendors: [] })
+  // Provider toggles the user flipped but has not saved, as {slug: bool}.
+  // Only entries in here are sent, so an untouched provider never gets an
+  // `enabled` written into config.toml.
+  property var pendingVendors: ({})
   // Pending "add account" forms: a count only. Each draft's content lives
   // in its delegate (replacing a model array on every keystroke rebuilds
   // the delegates and drops TextField focus after one character).
@@ -35,7 +39,27 @@ Column {
   property bool loading: false
   property bool saving: false
   readonly property bool canSave: !loading && !saving
-    && (selectedPrimary !== "" || snapshot.primary_choices.length === 0)
+    && (selectedPrimary !== "" || snapshot.primary_choices.length === 0
+      || Object.keys(pendingVendors).length > 0)
+
+  // A provider's effective state: the pending flip if there is one, else what
+  // the snapshot reported.
+  function vendorEnabled(vendor) {
+    return pendingVendors.hasOwnProperty(vendor.id)
+      ? pendingVendors[vendor.id] === true
+      : vendor.enabled === true
+  }
+
+  // Flipping back to the saved value drops the entry entirely rather than
+  // sending a no-op write.
+  function toggleVendor(vendor) {
+    var next = {}
+    for (var k in pendingVendors) next[k] = pendingVendors[k]
+    var wanted = !vendorEnabled(vendor)
+    if (wanted === (vendor.enabled === true)) delete next[vendor.id]
+    else next[vendor.id] = wanted
+    pendingVendors = next
+  }
 
   signal saved()
   signal fallbackRequested()
@@ -99,7 +123,8 @@ Column {
 
   function save() {
     if (!canSave) return
-    var built = Model.buildSettingsPatch(selectedPrimary, collectChanges(), collectAccountChanges())
+    var built = Model.buildSettingsPatch(selectedPrimary, collectChanges(), collectAccountChanges(),
+      pendingVendors)
     if (!built.ok) {
       errorText = built.error
       return
@@ -220,6 +245,9 @@ Column {
       return
     }
     scrubSecrets()
+    // The reload below re-reads the saved state; keeping the flips would make
+    // every toggle look pending forever.
+    pendingVendors = ({})
     saved()
     load()
     // load() clears stale status before refreshing the snapshot, so set the
@@ -376,6 +404,52 @@ Column {
           fontFamily: root.fontFamily
           onClicked: root.fallbackRequested()
         }
+      }
+    }
+  }
+
+  Column {
+    // Absent on a binary that predates provider toggles, which sends no
+    // `vendors` at all — the rest of the form still works.
+    visible: !root.loading && root.snapshot.vendors !== undefined
+      && root.snapshot.vendors.length > 0
+    width: parent.width
+    spacing: Style.space(8)
+
+    PanelSeparator {
+      width: parent.width
+      foreground: root.foreground
+    }
+    PanelSectionHeader {
+      text: "PROVIDERS"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+    }
+    Text {
+      width: parent.width
+      text: "Which providers the bar fetches. Providers that sign in through their own CLI — Claude, Codex, SuperGrok, Cursor, Kiro, GitHub Copilot — have no key to paste here: log in with that tool, then switch it on. Takes effect on save."
+      textFormat: Text.PlainText
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+    Repeater {
+      model: root.snapshot.vendors
+      delegate: Toggle {
+        required property var modelData
+        width: parent ? parent.width : 0
+        label: String(modelData.label || modelData.id)
+        description: modelData.credential === "login"
+          ? "Signs in through its own CLI — no API key here."
+          : (modelData.credential === "none"
+            ? "No credentials: read from the local app while it runs."
+            : "Needs an API key, added under Accounts below.")
+        checked: root.vendorEnabled(modelData)
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        enabled: !root.saving
+        onClicked: root.toggleVendor(modelData)
       }
     }
   }

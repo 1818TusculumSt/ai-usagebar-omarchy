@@ -69,9 +69,11 @@ assert.match(settingsViewSource, /write\(root\.pendingPayload\s*\+\s*"\\n"\)/);
 assert.match(panelSource, /width: Style\.space\(6\)\n\s+height: 1/);
 // Focus-loss dismissal remembers the settings scroll; reopening restores it.
 assert.match(panelSource, /property real savedSettingsScrollY: 0/);
-// Translucent backdrop behind the tiles: on a transparent bar, busy or
-// light wallpapers wash the text out.
-assert.match(barWidgetSource, /Util\.alpha\(Color\.background, 0\.62\)/);
+// The translucent backdrop plate was deliberately dropped in favour of
+// monochrome, wallpaper-aware tiles. Assert its ABSENCE so it cannot creep
+// back, and that the severity band still drives the tile color.
+assert.doesNotMatch(barWidgetSource, /Util\.alpha\(Color\.background, 0\.62\)/);
+assert.match(barWidgetSource, /bandColor\(root\.panelItem\.worstBand\)/);
 // The panel must CLOSE on focus loss (no settingsOpen guard in close) —
 // keeping it open swallowed the dismissal click and blocked other windows.
 assert.doesNotMatch(barWidgetSource, /settingsOpen\) return/);
@@ -481,8 +483,11 @@ assert.equal(model.isAlarming(unconfiguredReport[2]), true);
     {id: 'deepseek', error: 'HTTP 401', sections: []}
   ]})).entries;
   assert.deepEqual(Array.from(model.barEntries(exhaustion), e => e.id), ['kimi']);
-  assert.deepEqual(Array.from(model.readyEntries(exhaustion), e => e.id), ['zai', 'kimi'],
-    'tabs keep the exhausted account');
+  // Sorted: the POINT is that the exhausted account survives into the tabs,
+  // not the order it lands in — the bar sorts exhausted entries last, and
+  // pinning that incidental order here made this fail on a pure restyle.
+  assert.deepEqual(Array.from(model.readyEntries(exhaustion), e => e.id).sort(),
+    ['kimi', 'zai'], 'tabs keep the exhausted account');
   assert.deepEqual(Array.from(model.barTileEntries(exhaustion, 'kimi', true), e => e.id), ['kimi']);
   // Tiling off: the SELECTED entry alone — and an exhausted selection is
   // skipped for the first tileable account, never rendered as a tile.
@@ -625,12 +630,15 @@ assert.match(barWidgetSource, /labelVisible: false/);
 assert.match(barWidgetSource, /keepSpace: true/);
 assert.match(barWidgetSource, /root\.panelItem\.barLabelModels\(\)/);
 assert.match(barWidgetSource, /color: modelData\.color/);
-// The tag part renders as the vendor's LOGO when a bundled asset exists
-// (named accounts keep their suffix text beside it); anything else is the
-// plain text fallback — the tile never blanks out over a missing file.
-assert.match(barWidgetSource, /import "Model\.js" as Model/);
-assert.match(barWidgetSource, /Model\.logoAssetName\(tilePart\.logo\)/);
-assert.match(barWidgetSource, /Qt\.resolvedUrl\("logos\/" \+ Model\.logoAssetName\(tilePart\.logo\)\)/);
+// Brand logos were deliberately dropped from the BAR for monochrome,
+// wallpaper-aware tiles (see BarWidget.qml: "no brand logos in the bar"), so
+// it no longer needs Model.js at all. Assert their ABSENCE — a logo creeping
+// back is exactly the regression this rework was meant to prevent.
+assert.doesNotMatch(barWidgetSource, /import "Model\.js" as Model/);
+assert.doesNotMatch(barWidgetSource, /logoAssetName/);
+// `logoAssetName` itself is NOT dead: the KDE plasmoid's compact
+// representation still renders logos, and its behaviour is covered above.
+assert.equal(typeof model.logoAssetName, 'function');
 
 // The hero's trailing buttons keep clear of the scrollbar overlay.
 assert.match(panelSource, /width: Style\.space\(6\)\n\s+height: 1/);
@@ -1033,5 +1041,50 @@ assert.equal(model.buildSettingsPatch('openai', [{id: 'kimi', action: 'set', val
 assert.equal(model.buildSettingsPatch('openai', [{id: 'kimi', action: 'bogus'}]).ok, false);
 assert.equal(model.parseSettingsApplyResult('{"ok":true}'), true);
 assert.equal(model.parseSettingsApplyResult('{"ok":false}'), false);
+
+// Provider toggles: the only way to opt in a vendor with no key to paste.
+const vendorSnapshot = model.parseSettingsSnapshot(JSON.stringify({
+  schema_version: 1, primary: 'anthropic',
+  primary_choices: [{id: 'anthropic', label: 'Claude'}], keys: [], accounts: [],
+  vendors: [
+    {id: 'copilot', label: 'GitHub Copilot', enabled: false, credential: 'login'},
+    {id: 'zai', label: 'Z.AI', enabled: true, credential: 'key'},
+    {id: 'antigravity', label: 'Antigravity', enabled: false, credential: 'none'},
+    {id: '', label: 'dropped', enabled: true, credential: 'key'},
+    {id: 'weird', label: 'Weird', enabled: true, credential: 'nonsense'}
+  ]
+}));
+assert.equal(vendorSnapshot.ok, true);
+// The id-less row is dropped; an unknown credential kind degrades to "key".
+// Array.from: Model.js runs in a vm realm, so an array it returns fails a
+// strict deep compare against one built out here.
+assert.deepEqual(Array.from(vendorSnapshot.vendors, v => v.id),
+  ['copilot', 'zai', 'antigravity', 'weird']);
+assert.equal(vendorSnapshot.vendors[0].credential, 'login');
+assert.equal(vendorSnapshot.vendors[0].enabled, false);
+assert.equal(vendorSnapshot.vendors[2].credential, 'none');
+assert.equal(vendorSnapshot.vendors[3].credential, 'key');
+
+// A binary predating toggles sends no `vendors`; the form must still parse.
+const noVendors = model.parseSettingsSnapshot(JSON.stringify({
+  schema_version: 1, primary: 'anthropic',
+  primary_choices: [{id: 'anthropic', label: 'Claude'}], keys: [], accounts: []
+}));
+assert.equal(noVendors.ok, true);
+assert.equal(noVendors.vendors.length, 0);
+
+// Toggles alone are a saveable change, and ride their own patch channel.
+const togglePatch = model.buildSettingsPatch('', [], [], {copilot: true, cursor: false});
+assert.equal(togglePatch.ok, true);
+assert.deepEqual(JSON.parse(togglePatch.payload), {
+  schema_version: 1, keys: {}, vendors: {copilot: true, cursor: false}
+});
+// No toggles and nothing else changed is still "nothing to save".
+assert.equal(model.buildSettingsPatch('', [], [], {}).ok, false);
+assert.equal(model.buildSettingsPatch('', [], [], {'not a slug!': true}).ok, false);
+// Non-boolean values are coerced, never forwarded as-is.
+assert.deepEqual(
+  JSON.parse(model.buildSettingsPatch('', [], [], {copilot: 'yes'}).payload).vendors,
+  {copilot: false});
 
 console.log('Omarchy model tests passed');

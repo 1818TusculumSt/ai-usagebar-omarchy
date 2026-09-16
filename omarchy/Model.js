@@ -781,10 +781,27 @@ function parseSettingsSnapshot(raw) {
       if (account) accounts.push(account)
     }
 
+    // Additive on schema 1: a binary predating provider toggles sends no
+    // `vendors`, and the form then shows no toggle section at all.
+    var vendors = []
+    var rawVendors = Array.isArray(parsed.vendors) ? parsed.vendors : []
+    for (var v = 0; v < rawVendors.length && v < 64; v++) {
+      var vendor = rawVendors[v]
+      var vendorId = settingsId(vendor && vendor.id)
+      if (vendorId === "") continue
+      var credential = cleanText(vendor.credential, 16)
+      vendors.push({
+        id: vendorId,
+        label: cleanText(vendor.label, 120) || vendorId,
+        enabled: vendor.enabled === true,
+        credential: credential === "login" || credential === "none" ? credential : "key"
+      })
+    }
+
     if (!primaryAvailable) primary = choices.length > 0 ? choices[0].id : ""
     return {
       ok: true, error: "", primary: primary,
-      primary_choices: choices, keys: keys, accounts: accounts
+      primary_choices: choices, keys: keys, accounts: accounts, vendors: vendors
     }
   } catch (error) {
     return { ok: false, error: "The settings command returned invalid JSON.", primary: "", primary_choices: [], keys: [], accounts: [] }
@@ -794,7 +811,7 @@ function parseSettingsSnapshot(raw) {
 // accountChanges: [{action:"update",vendor,label,fields,apiKey:{action,value}} |
 //                  {action:"add",vendor,name,fields,apiKey} |
 //                  {action:"remove",vendor,label}]
-function buildSettingsPatch(primary, changes, accountChanges) {
+function buildSettingsPatch(primary, changes, accountChanges, vendorToggles) {
   var primaryId = settingsId(primary)
   var rawPrimary = String(primary || "").trim()
   if (rawPrimary !== "" && primaryId === "")
@@ -898,10 +915,25 @@ function buildSettingsPatch(primary, changes, accountChanges) {
     accountsByVendor[vendor].push(mutation)
   }
 
-  if (primaryId === "" && seen.length === 0 && Object.keys(accountsByVendor).length === 0)
+  // Provider on/off toggles. Only the ones actually flipped are sent: an
+  // untouched vendor must not get an `enabled` written into config.toml.
+  var vendors = {}
+  if (vendorToggles && typeof vendorToggles === "object" && !Array.isArray(vendorToggles)) {
+    for (var vk in vendorToggles) {
+      if (vk === "__proto__" || vk === "constructor" || vk === "prototype") continue
+      var vid = settingsId(vk)
+      if (vid === "")
+        return { ok: false, error: "A provider toggle has an invalid id.", payload: "" }
+      vendors[vid] = vendorToggles[vk] === true
+    }
+  }
+
+  if (primaryId === "" && seen.length === 0 && Object.keys(accountsByVendor).length === 0
+      && Object.keys(vendors).length === 0)
     return { ok: false, error: "There are no settings changes to save.", payload: "" }
   var patch = { schema_version: 1, keys: keys }
   if (Object.keys(accountsByVendor).length > 0) patch.accounts = accountsByVendor
+  if (Object.keys(vendors).length > 0) patch.vendors = vendors
   if (primaryId !== "") patch.primary = primaryId
   return {
     ok: true,
