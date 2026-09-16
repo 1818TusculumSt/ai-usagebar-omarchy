@@ -355,8 +355,38 @@ pub enum VendorSnapshot {
     Cursor(CursorSnapshot),
     Minimax(MinimaxSnapshot),
     Kiro(KiroSnapshot),
+    Copilot(CopilotSnapshot),
     OpenCodeGo(crate::opencode_go::types::Usage),
 }
+
+/// GitHub Copilot subscription quota, as the editor extensions read it from
+/// `copilot_internal/user`. Only the premium-request pool is metered; chat and
+/// completions are unlimited on every current plan.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopilotSnapshot {
+    /// Rendered plan name, e.g. "Copilot Pro".
+    pub plan: String,
+    /// GitHub login the token belongs to. Shown in the tooltip, and keeps one
+    /// account's cache from being served for another.
+    pub account: String,
+    /// Premium requests consumed, as a percent of the entitlement.
+    pub premium_pct: i32,
+    /// Premium requests included in the plan per cycle.
+    pub entitlement: f64,
+    /// Consumed and remaining counts. Fractional: a premium request can cost
+    /// less than one whole unit.
+    pub used: f64,
+    pub remaining: f64,
+    /// Plans that meter no premium requests at all.
+    pub unlimited: bool,
+    /// Requests billed past the entitlement, and whether the plan allows any.
+    pub overage_count: f64,
+    pub overage_permitted: bool,
+    /// When the current billing cycle rolls over.
+    pub reset_at: Option<DateTime<Utc>>,
+}
+
+impl Eq for CopilotSnapshot {}
 
 /// Google Antigravity 2.0 / CLI snapshot. The API groups models into Gemini
 /// and third-party (Claude/GPT) buckets, and each group carries its own 5-hour

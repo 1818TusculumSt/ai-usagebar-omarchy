@@ -37,6 +37,9 @@ pub(crate) const VENDOR_SECRET_ENV_VARS: &[&str] = &[
     "XAI_API_KEY",
     "GROK_API_KEY",
     "OPENCODE_GO_API_KEY",
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
 ];
 
 pub(crate) fn vendor_secret_env_vars_to_remove(keep: &[&str]) -> Vec<&'static str> {
@@ -127,6 +130,7 @@ pub enum VendorId {
     Cursor,
     Minimax,
     Kiro,
+    Copilot,
     #[serde(rename = "opencode-go")]
     OpenCodeGo,
 }
@@ -151,6 +155,7 @@ impl VendorId {
             VendorId::Cursor => "cursor",
             VendorId::Minimax => "minimax",
             VendorId::Kiro => "kiro",
+            VendorId::Copilot => "copilot",
             VendorId::OpenCodeGo => "opencode-go",
         }
     }
@@ -177,6 +182,7 @@ impl VendorId {
             VendorId::Cursor => "Cursor",
             VendorId::Minimax => "MiniMax",
             VendorId::Kiro => "Kiro",
+            VendorId::Copilot => "GitHub Copilot",
             VendorId::OpenCodeGo => "OpenCode Go",
         }
     }
@@ -204,6 +210,7 @@ impl VendorId {
             VendorId::Cursor => "cur",
             VendorId::Minimax => "mmx",
             VendorId::Kiro => "kir",
+            VendorId::Copilot => "cpl",
             VendorId::OpenCodeGo => "ocg",
         }
     }
@@ -231,6 +238,7 @@ impl VendorId {
             VendorId::Cursor => "cursor",
             VendorId::Minimax => "minimax",
             VendorId::Kiro => "kiro",
+            VendorId::Copilot => "copilot",
             VendorId::OpenCodeGo => "opencode",
         }
     }
@@ -254,6 +262,7 @@ impl VendorId {
             VendorId::Cursor,
             VendorId::Minimax,
             VendorId::Kiro,
+            VendorId::Copilot,
             VendorId::OpenCodeGo,
         ]
     }

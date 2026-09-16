@@ -298,6 +298,25 @@ enabled = false
 # auth_path = "/home/you/.grok/auth.json"
 # config_path = "/home/you/.grok/config.toml"
 
+# GitHub Copilot premium-request quota — the same pool the editor extensions
+# meter, read from the endpoint they use. No token is minted here: whichever one
+# already exists is reused, in the order the official Copilot CLI checks them —
+# COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, then `gh`'s credential store.
+# Chat and completions are unlimited on current plans, so only the premium pool
+# is reported.
+[copilot]
+# Disabled by default — enable once `gh auth login` has run, or a token is
+# exported. A classic PAT (ghp_*) will not work; Copilot rejects them.
+enabled = false
+# Consulted only when no token is configured or exported. `gh` has no single
+# canonical install path, so this defaults to a PATH lookup; pin an absolute
+# path if more than one `gh` can appear on PATH.
+# gh_binary = "/usr/bin/gh"
+# Last resort. Prefer `gh auth login` or an environment variable — an inline
+# token here is chmod 600'd like every other key in this file, but it is still
+# a credential sitting on disk.
+# token = "gho_..."
+
 # Google Antigravity. No credentials: usage is read from whichever local
 # Antigravity product is running (Antigravity 2.0, the `agy` CLI, or the IDE) —
 # all three share one account-wide quota. Set ANTIGRAVITY_LS_ADDRESS to

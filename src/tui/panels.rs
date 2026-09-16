@@ -218,6 +218,14 @@ pub fn compact_cells(snapshot: &VendorSnapshot) -> (String, Vec<(String, PaceSev
             ],
         ),
         VendorSnapshot::Kiro(s) => (s.plan.clone(), vec![pct("credits", s.pct())]),
+        VendorSnapshot::Copilot(s) => (
+            s.plan.clone(),
+            vec![if s.unlimited {
+                ("premium ∞".into(), PaceSeverity::Low)
+            } else {
+                pct("premium", s.premium_pct)
+            }],
+        ),
         VendorSnapshot::OpenCodeGo(s) => {
             let cells = [
                 ("rolling", s.rolling.as_ref()),
@@ -291,6 +299,8 @@ pub fn headline_pct(snapshot: &VendorSnapshot) -> Option<i32> {
         .flatten()
         .max(),
         VendorSnapshot::SuperGrok(s) => Some(s.weekly_pct),
+        // An unlimited pool has no utilisation to report.
+        VendorSnapshot::Copilot(s) => (!s.unlimited).then_some(s.premium_pct),
         VendorSnapshot::Openrouter(_)
         | VendorSnapshot::Deepseek(_)
         | VendorSnapshot::Kilo(_)
@@ -352,6 +362,7 @@ pub(crate) fn sections_with_metadata_for(
                 VendorSnapshot::Moonshot(s) => moonshot_sections(s),
                 VendorSnapshot::Grok(s) => grok_sections(s),
                 VendorSnapshot::SuperGrok(s) => supergrok_sections(s, now),
+                VendorSnapshot::Copilot(s) => copilot_sections(s, now),
                 VendorSnapshot::Antigravity(s) => antigravity_sections(s, now),
                 VendorSnapshot::Cursor(s) => cursor_sections(s, now),
                 VendorSnapshot::Minimax(s) => minimax_sections(s, now, pace_tolerance),
@@ -1002,6 +1013,54 @@ fn grok_sections(s: &crate::usage::GrokSnapshot) -> SectionBuilder {
             value: usd(s.balance),
         },
     ])
+}
+
+fn copilot_sections(s: &crate::usage::CopilotSnapshot, now: DateTime<Utc>) -> SectionBuilder {
+    let pct = s.premium_pct;
+    let count = |value: f64| {
+        if (value - value.round()).abs() < 0.05 {
+            format!("{:.0}", value.round())
+        } else {
+            format!("{value:.1}")
+        }
+    };
+    let mut v = SectionBuilder::new(vec![
+        Section::Title {
+            left: s.plan.clone(),
+            right: (!s.account.is_empty()).then(|| s.account.clone()),
+        },
+        Section::Spacer,
+    ]);
+    if s.unlimited {
+        v.push(Section::Text {
+            label: "Premium requests".into(),
+            value: "Unlimited".into(),
+        });
+    } else {
+        v.push_metric(
+            Section::Metric {
+                label: "Premium requests".into(),
+                pct: pct.clamp(0, 100) as u16,
+                severity: severity_for(pct),
+                value_label: format!("{pct}%"),
+                footnote: format!("{} of {}", count(s.used), count(s.entitlement)),
+            },
+            s.reset_at,
+        );
+    }
+    v.push(Section::Spacer);
+    v.push(Section::Text {
+        label: "Resets".into(),
+        value: countdown::format(s.reset_at, now),
+    });
+    if s.overage_count > 0.0 {
+        v.push(Section::Spacer);
+        v.push(Section::Text {
+            label: "Billed over plan".into(),
+            value: count(s.overage_count),
+        });
+    }
+    v
 }
 
 fn supergrok_sections(s: &crate::usage::SuperGrokSnapshot, now: DateTime<Utc>) -> SectionBuilder {

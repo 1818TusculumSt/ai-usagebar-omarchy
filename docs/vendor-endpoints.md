@@ -22,6 +22,7 @@ defensive and includes opt-in live tests for catching response changes.
 | **Anthropic API** | `api.anthropic.com/v1/organizations/cost_report` (Admin API; documented) | Month-to-date spend ($, excludes Priority Tier), optional spend-vs-limit % | No — widget/TUI only |
 | **OpenAI API** | `api.openai.com/v1/organization/costs` (Admin API; documented) | Trailing-30-day billed $ grouped by line item (daily buckets), optional spend-vs-limit % | No — widget/TUI only |
 | **Cursor** | `cursor.com/api/usage-summary` (undocumented; the dashboard's own frontend) | Two included-usage pools this billing cycle — Cursor Models (Auto/Composer) % and Other Models (named/API) % — plus plan, reset, on-demand | Yes |
+| **GitHub Copilot** | `api.github.com/copilot_internal/user` (undocumented; the endpoint the editor extensions read for their own premium-request meter) | Premium-request pool this billing cycle — used/entitlement/%, plan, reset, overage | No — widget/TUI only |
 | **Kiro CLI** | `codewhisperer.<region>.amazonaws.com` `GetUsageLimits` (undocumented; the same call kiro-cli's own `/usage` slash command makes) | Single credit pool this cycle — used/limit/%, plan, reset | No — widget/TUI only |
 | **OpenCode Go** | `opencode.ai/zen/go/v1/usage` | Rolling, weekly, and monthly `percent` windows with absolute reset timestamps | Yes |
 

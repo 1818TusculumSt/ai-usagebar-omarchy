@@ -132,6 +132,7 @@ come from environment variables or `config.toml`.
 | Google Antigravity | Local Antigravity server | Opt in and keep Antigravity or an interactive `agy` session running. |
 | Cursor | Existing Cursor IDE or `cursor-agent` login | Opt in and sign in once. `cursor-agent` is the headless fallback. |
 | Kiro CLI | Existing kiro-cli login | Opt in and run `kiro-cli login` once. ai-usagebar-omarchy refreshes the session when needed. |
+| GitHub Copilot | Existing `gh` login, or a GitHub token in the environment | Opt in, then run `gh auth login` — or export `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`. Reports the premium-request pool; chat and completions are unlimited. Classic PATs (`ghp_`) are rejected by Copilot. |
 | OpenCode Go | API key (`OPENCODE_GO_API_KEY` env or `[opencode-go] api_key` in config) | Enable `[opencode-go]`, then enter the key in the Omarchy settings panel or set the environment variable. Extra keys via `[[opencode-go.accounts]]`. |
 
 ### OpenCode Go
@@ -161,7 +162,7 @@ rather than silently querying the wrong URL.
 ### Enabling a vendor
 
 `enabled = true` is what makes a vendor fetch. Anthropic API, DeepSeek, Kimi,
-Kilo, Novita, Moonshot, Grok, SuperGrok, Antigravity, Cursor, MiniMax, and Kiro CLI all default to **disabled** so that existing
+Kilo, Novita, Moonshot, Grok, SuperGrok, Antigravity, Cursor, MiniMax, Kiro CLI, and GitHub Copilot all default to **disabled** so that existing
 installs are unaffected until you opt in. Use either method:
 
 - Use the gear or `s` in the Omarchy panel, or run
@@ -174,9 +175,9 @@ The primary-vendor selector only offers vendors that are currently enabled, so a
 vendor you haven't opted into cannot be set as primary.
 
 Vendors that authenticate through a local login rather than a key — Cursor,
-Kiro CLI, SuperGrok, Antigravity, and Kimi when you have a Kimi For Coding
-subscription — have no key to save, so enable them with `enabled = true` in
-`config.toml`.
+Kiro CLI, SuperGrok, Antigravity, GitHub Copilot, and Kimi when you have a Kimi
+For Coding subscription — have no key to save, so enable them with
+`enabled = true` in `config.toml`.
 
 ### Credential resolution order (for API-key vendors)
 
@@ -195,6 +196,10 @@ For each API-key vendor, ai-usagebar-omarchy checks in this order:
 - SuperGrok credentials stay inside Grok Build. ai-usagebar-omarchy receives a
   credential-free billing result and hashes auth/config files only to separate
   caches between logins.
+- GitHub Copilot mints no token. It reuses one that already exists — an
+  exported variable, or whatever `gh` holds in its own credential store — and
+  sends it to a single endpoint. The token never reaches the cache, and a
+  failure names the source it came from rather than the token itself.
 - Cursor's `state.vscdb` and `cursor-agent` fallback `auth.json` are read-only.
 - kiro-cli's `data.sqlite3` is read-only. Refreshed credentials go to an
   account-scoped `kiro/oauth.json` file, mode `600` on Unix.

@@ -16,7 +16,7 @@ settings.
 # primary = "anthropic"   # anthropic | anthropic_api | openai | openai_api
 #                         # | zai | openrouter | deepseek | kimi | kilo
 #                         # | novita | moonshot | grok | supergrok | antigravity
-#                         # | cursor | minimax | kiro | opencode-go
+#                         # | cursor | minimax | kiro | copilot | opencode-go
 
 [context]
 enabled = false           # opt in, then press c in ai-usagebar-omarchy-tui
@@ -143,6 +143,16 @@ enabled = true             # disabled by default; enable once you add an API key
 # Extra keys, each its own entry everywhere: [[grok.accounts]] with just
 # api_key (auto-named 1, 2, … by position) — the shared multi-account shape
 # every key vendor takes.
+
+[copilot]
+enabled = true             # disabled by default; enable once `gh auth login` has run
+# No API key. The token is resolved in the Copilot CLI's own order:
+# COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, then `gh auth token`.
+# `gh` has no single canonical install path, so this is a PATH lookup by
+# default; pin it when more than one `gh` can appear on PATH.
+# gh_binary = "/usr/bin/gh"
+# Last resort; prefer `gh auth login` or an environment variable.
+# token = "gho_..."
 
 [supergrok]
 enabled = true             # disabled by default; enable once you've run `grok login`

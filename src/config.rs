@@ -58,6 +58,7 @@ pub struct Config {
     pub cursor: CursorConfig,
     pub minimax: MinimaxConfig,
     pub kiro: KiroConfig,
+    pub copilot: CopilotConfig,
     #[serde(rename = "opencode-go")]
     pub opencode_go: OpenCodeGoConfig,
 }
@@ -1143,6 +1144,42 @@ impl Default for GrokConfig {
 /// Opt-in like Cursor/Kiro (`enabled` defaults to `false`): it requires a
 /// separate official executable and signed-in session, so it stays off until
 /// the user explicitly turns it on.
+/// GitHub Copilot. Reports the premium-request pool the editor extensions
+/// meter, read from the same `copilot_internal/user` endpoint they use.
+///
+/// No token is minted here: one that already exists is reused, in the order the
+/// official Copilot CLI checks — `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`,
+/// `GITHUB_TOKEN`, then `gh`'s own credential store.
+///
+/// Opt-in like Cursor/Kiro (`enabled` defaults to `false`): it needs a
+/// signed-in `gh` or an exported token, so it stays off until the user turns
+/// it on.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CopilotConfig {
+    pub enabled: bool,
+    /// Inline token, lowest-friction but highest-exposure. Prefer `gh auth
+    /// login` or an environment variable; set here, it gets the same 0600
+    /// treatment as every other inline key in this file.
+    pub token: Option<String>,
+    /// `gh` executable, consulted only when no token is configured or exported.
+    /// Unlike the pinned vendor CLIs above, `gh` has no single canonical
+    /// install path — distro package, Homebrew, and version managers all
+    /// differ — so PATH is the only portable default. Pin an absolute path to
+    /// avoid resolving a `gh` that happens to come earlier on PATH.
+    pub gh_binary: PathBuf,
+}
+
+impl Default for CopilotConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            token: None,
+            gh_binary: PathBuf::from("gh"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SuperGrokConfig {
@@ -1518,6 +1555,7 @@ impl Config {
         expand_tilde_opt(&mut self.cursor.agent_auth_path);
         expand_tilde_opt(&mut self.kiro.db_path);
         expand_tilde_opt(&mut self.kimi.credentials_path);
+        self.copilot.gh_binary = expand_tilde(&self.copilot.gh_binary);
         self.supergrok.grok_binary = expand_tilde(&self.supergrok.grok_binary);
         expand_tilde_opt(&mut self.supergrok.auth_path);
         expand_tilde_opt(&mut self.supergrok.config_path);
@@ -1543,6 +1581,7 @@ impl Config {
             self.anthropic_api.api_key.as_deref(),
             self.openai_api.api_key.as_deref(),
             self.opencode_go.api_key.as_deref(),
+            self.copilot.token.as_deref(),
         ]
         .into_iter()
         // Every numbered account's inline key gets the same protection as
@@ -1610,6 +1649,7 @@ impl Config {
             VendorId::Cursor => self.cursor.enabled,
             VendorId::Minimax => self.minimax.enabled,
             VendorId::Kiro => self.kiro.enabled,
+            VendorId::Copilot => self.copilot.enabled,
             VendorId::OpenCodeGo => self.opencode_go.enabled,
             VendorId::OpenaiApi => self.openai_api.enabled,
         }
@@ -1672,6 +1712,11 @@ impl Config {
         if self.supergrok.grok_binary.as_os_str().is_empty() {
             return Err(AppError::Other(
                 "[supergrok] grok_binary must not be empty".into(),
+            ));
+        }
+        if self.copilot.gh_binary.as_os_str().is_empty() {
+            return Err(AppError::Other(
+                "[copilot] gh_binary must not be empty".into(),
             ));
         }
         let mut labels = HashSet::new();

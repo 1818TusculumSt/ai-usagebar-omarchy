@@ -17,7 +17,7 @@ metrics expand to an empty string unless noted otherwise.
 | SuperGrok | `sgk` | Anthropic API | `aac` |
 | Antigravity | `agy` | Cursor | `cur` |
 | MiniMax | `mmx` | Kiro CLI | `kir` |
-| OpenCode Go | `ocg` | | |
+| OpenCode Go | `ocg` | GitHub Copilot | `cpl` |
 
 The same codes ride the `ai-usagebar-omarchy usage --json` report as each entry's
 `short_name`, so a native frontend can draw a Waybar-style provider tag without
@@ -159,6 +159,24 @@ separate between logins.
 The default executable is `$GROK_HOME/bin/grok`, or `~/.grok/bin/grok` when
 `GROK_HOME` is unset. ai-usagebar-omarchy does not search `PATH`. Set
 `[supergrok] grok_binary` only when the trusted official binary lives elsewhere.
+
+## GitHub Copilot
+
+`{cpl_plan}`, `{cpl_pct}`, `{cpl_reset}`, `{cpl_used}`, `{cpl_entitlement}`,
+`{cpl_remaining}`, `{cpl_account}`
+
+- `{cpl_pct}` is the share of the plan's premium-request pool consumed.
+- The default bar format is `{cpl_pct}% · {cpl_reset}`.
+- `{session_pct}` and `{weekly_pct}` remain aliases for `cpl_pct`.
+- Counts are fractional: a premium request can cost less than one whole unit,
+  so `{cpl_remaining}` reads `198.6`, not `198`.
+- On a plan whose premium pool is unlimited, the three count placeholders read
+  `∞` and `{cpl_pct}` is `0`.
+
+Only the premium-request pool is metered; chat and completions are unlimited on
+current plans. ai-usagebar-omarchy mints no GitHub token — it reuses an exported
+`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, or one from `gh`'s own
+credential store, in that order.
 
 ## Anthropic API
 

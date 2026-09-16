@@ -26,6 +26,7 @@ use crate::moonshot;
 use crate::novita;
 use crate::openai;
 use crate::openrouter;
+use crate::copilot;
 use crate::pango::escape;
 use crate::supergrok;
 use crate::theme::Theme;
@@ -175,6 +176,7 @@ async fn build_output(cli: &Cli) -> Result<WaybarOutput> {
         Vendor::Cursor => cursor_output(cli, &config).await,
         Vendor::Minimax => minimax_output(cli, &config).await,
         Vendor::Kiro => kiro_output(cli, &config).await,
+        Vendor::Copilot => copilot_output(cli, &config).await,
         Vendor::OpenCodeGo => opencode_go_output(cli, &config).await,
     }
 }
@@ -421,6 +423,41 @@ async fn supergrok_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let vendor_outcome: VendorOutcome = outcome.into();
     let opts = RenderOpts::from_cli(cli);
     Ok(supergrok::vendor::render(
+        &vendor_outcome,
+        &snap,
+        &theme,
+        &opts,
+        chrono::Utc::now(),
+    ))
+}
+
+/// Copilot reuses a GitHub token that already exists — an exported variable or
+/// `gh`'s credential store — and never mints or refreshes one of its own.
+async fn copilot_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
+    let (token, _source) =
+        copilot::creds::resolve_token(config.copilot.token.as_deref(), &config.copilot.gh_binary)
+            .await?;
+    let client = http_client()?;
+    let cache = vendor_cache(cli, "copilot")?;
+    let outcome = match copilot::fetch_snapshot(
+        &client,
+        &token,
+        &cache,
+        &copilot::fetch::Endpoints::default(),
+        DEFAULT_TTL,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(e) if e.is_transient() => return Ok(WaybarOutput::loading(cli.icon.as_deref())),
+        Err(e) => return Err(e),
+    };
+
+    let theme = theme_from_cli(cli);
+    let snap = outcome.snapshot.clone();
+    let vendor_outcome: VendorOutcome = outcome.into();
+    let opts = RenderOpts::from_cli(cli);
+    Ok(copilot::vendor::render(
         &vendor_outcome,
         &snap,
         &theme,

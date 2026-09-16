@@ -809,6 +809,23 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             .await?;
             Ok(outcome.into())
         }
+        VendorId::Copilot => {
+            let cache = crate::cache::Cache::for_vendor("copilot")?;
+            let (token, _source) = crate::copilot::creds::resolve_token(
+                config.copilot.token.as_deref(),
+                &config.copilot.gh_binary,
+            )
+            .await?;
+            let outcome = crate::copilot::fetch_snapshot(
+                client,
+                &token,
+                &cache,
+                &crate::copilot::fetch::Endpoints::default(),
+                DEFAULT_TTL,
+            )
+            .await?;
+            Ok(outcome.into())
+        }
         VendorId::Supergrok => {
             let cache = crate::cache::Cache::for_vendor("supergrok")?;
             let scope_paths = crate::supergrok::scope::ScopePaths::with_overrides(

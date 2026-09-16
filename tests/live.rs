@@ -62,6 +62,7 @@ use std::time::Duration;
 
 use ai_usagebar::anthropic;
 use ai_usagebar::cache::Cache;
+use ai_usagebar::copilot;
 use ai_usagebar::cursor;
 use ai_usagebar::error::AppError;
 use ai_usagebar::kimi;
@@ -651,6 +652,74 @@ async fn supergrok_live() {
         out.snapshot.period.label(),
         out.snapshot.weekly_pct,
         out.snapshot.prepaid_balance,
+        out.snapshot.reset_at,
+    );
+}
+
+/// GitHub Copilot — the editors' own `copilot_internal/user` quota endpoint.
+///
+/// Skipped rather than failed when no GitHub token is reachable: unlike the key
+/// vendors there is nothing to export in CI, and `gh` is not installed on every
+/// machine that runs this suite.
+#[tokio::test]
+#[ignore = "live API; run with --ignored"]
+async fn copilot_live() {
+    let defaults = ai_usagebar::config::Config::default();
+    let token = match copilot::creds::resolve_token(None, &defaults.copilot.gh_binary).await {
+        Ok((token, source)) => {
+            println!("copilot: using a token from {}", source.label());
+            token
+        }
+        Err(error) => {
+            println!("⏭  copilot skipped — no GitHub token available ({error})");
+            return;
+        }
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("http client");
+    let cache = xdg_cache_for("copilot");
+    let out = copilot::fetch_snapshot(
+        &client,
+        &token,
+        &cache,
+        &copilot::fetch::Endpoints::default(),
+        Duration::ZERO,
+    )
+    .await
+    .expect("Copilot quota should succeed with a valid GitHub token");
+
+    assert_pct("copilot", out.snapshot.premium_pct);
+    assert!(!out.snapshot.plan.is_empty(), "copilot plan label empty");
+    // An unlimited pool legitimately carries no entitlement; a metered one must,
+    // or the percentage above came from nowhere.
+    if !out.snapshot.unlimited {
+        assert!(
+            out.snapshot.entitlement > 0.0,
+            "copilot: metered plan with no entitlement — shape changed?"
+        );
+        assert!(
+            out.snapshot.remaining <= out.snapshot.entitlement,
+            "copilot: remaining {} exceeds entitlement {}",
+            out.snapshot.remaining,
+            out.snapshot.entitlement
+        );
+    }
+    if let Some(reset) = out.snapshot.reset_at {
+        assert!(
+            reset > chrono::Utc::now() - chrono::Duration::days(1),
+            "copilot: reset_at looks implausibly old: {reset:?}"
+        );
+    }
+    println!(
+        "✅ copilot — plan={}, {}% used, {}/{} left, unlimited={}, reset {:?}",
+        out.snapshot.plan,
+        out.snapshot.premium_pct,
+        out.snapshot.remaining,
+        out.snapshot.entitlement,
+        out.snapshot.unlimited,
         out.snapshot.reset_at,
     );
 }

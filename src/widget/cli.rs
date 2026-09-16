@@ -280,6 +280,7 @@ pub enum Vendor {
     Cursor,
     Minimax,
     Kiro,
+    Copilot,
     #[value(name = "opencode-go")]
     OpenCodeGo,
 }
@@ -308,6 +309,7 @@ impl Vendor {
             Vendor::Cursor => crate::vendor::VendorId::Cursor,
             Vendor::Minimax => crate::vendor::VendorId::Minimax,
             Vendor::Kiro => crate::vendor::VendorId::Kiro,
+            Vendor::Copilot => crate::vendor::VendorId::Copilot,
             Vendor::OpenCodeGo => crate::vendor::VendorId::OpenCodeGo,
         })
     }
@@ -398,6 +400,7 @@ fn id_to_vendor(id: crate::vendor::VendorId) -> Vendor {
         crate::vendor::VendorId::Cursor => Vendor::Cursor,
         crate::vendor::VendorId::Minimax => Vendor::Minimax,
         crate::vendor::VendorId::Kiro => Vendor::Kiro,
+        crate::vendor::VendorId::Copilot => Vendor::Copilot,
         crate::vendor::VendorId::OpenCodeGo => Vendor::OpenCodeGo,
     }
 }
