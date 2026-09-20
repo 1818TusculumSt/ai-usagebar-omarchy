@@ -1079,6 +1079,16 @@ assert.equal(togglePatch.ok, true);
 assert.deepEqual(JSON.parse(togglePatch.payload), {
   schema_version: 1, keys: {}, vendors: {copilot: true, cursor: false}
 });
+const providerSnapshot = [
+  {id: 'anthropic', enabled: true},
+  {id: 'openai', enabled: true},
+  {id: 'openrouter', enabled: false}
+];
+assert.equal(model.primaryAfterToggles(providerSnapshot, 'anthropic', {anthropic: false}), 'openai');
+assert.equal(model.primaryAfterToggles(providerSnapshot, 'openai', {openai: false}), 'anthropic');
+assert.equal(model.primaryAfterToggles(providerSnapshot, 'anthropic',
+  {anthropic: false, openai: false}), '');
+assert.equal(model.primaryAfterToggles(providerSnapshot, 'anthropic', {}), 'anthropic');
 // No toggles and nothing else changed is still "nothing to save".
 assert.equal(model.buildSettingsPatch('', [], [], {}).ok, false);
 assert.equal(model.buildSettingsPatch('', [], [], {'not a slug!': true}).ok, false);

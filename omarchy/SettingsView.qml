@@ -123,7 +123,11 @@ Column {
 
   function save() {
     if (!canSave) return
-    var built = Model.buildSettingsPatch(selectedPrimary, collectChanges(), collectAccountChanges(),
+    // Disabling the current primary must switch it before the Rust bridge
+    // validates the patch; otherwise the toggle and primary contradict each
+    // other and the save is rejected.
+    var nextPrimary = Model.primaryAfterToggles(snapshot.vendors, selectedPrimary, pendingVendors)
+    var built = Model.buildSettingsPatch(nextPrimary, collectChanges(), collectAccountChanges(),
       pendingVendors)
     if (!built.ok) {
       errorText = built.error

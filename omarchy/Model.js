@@ -808,6 +808,24 @@ function parseSettingsSnapshot(raw) {
   }
 }
 
+function primaryAfterToggles(vendors, primary, toggles) {
+  var list = Array.isArray(vendors) ? vendors : []
+  var wanted = String(primary || "").trim()
+  var changed = toggles && typeof toggles === "object" && !Array.isArray(toggles)
+    ? toggles : {}
+  var isEnabled = function(vendor) {
+    return Object.prototype.hasOwnProperty.call(changed, vendor.id)
+      ? changed[vendor.id] === true
+      : vendor.enabled === true
+  }
+
+  for (var i = 0; i < list.length; i++)
+    if (list[i].id === wanted && isEnabled(list[i])) return wanted
+  for (var j = 0; j < list.length; j++)
+    if (isEnabled(list[j])) return String(list[j].id || "")
+  return ""
+}
+
 // accountChanges: [{action:"update",vendor,label,fields,apiKey:{action,value}} |
 //                  {action:"add",vendor,name,fields,apiKey} |
 //                  {action:"remove",vendor,label}]
