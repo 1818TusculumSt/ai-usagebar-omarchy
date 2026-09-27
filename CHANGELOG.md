@@ -35,6 +35,14 @@ Each release is also published at
 
 ### Fixed
 
+- **A spent Copilot pool no longer reads as a schema error.** GitHub reports
+  the limit as `percent_remaining: 0` plus a negative `quota_remaining` (the
+  overshoot, overage not permitted). The parser rejected that remainder, so
+  the panel kept a stale percentage and a "schema mismatch" warning instead
+  of the limit. A negative remainder within bounds is now the exhausted
+  state: 100%, nothing left, and the panel says premium requests are paused
+  until reset.
+
 - Four stale assertions in `omarchy/model.test.mjs` left behind by the
   monochrome bar-tile rework: three asserted `BarWidget.qml` still imports
   `Model.js` and resolves logo assets (brand logos were deliberately dropped

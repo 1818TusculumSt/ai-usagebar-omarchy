@@ -1017,6 +1017,7 @@ fn grok_sections(s: &crate::usage::GrokSnapshot) -> SectionBuilder {
 
 fn copilot_sections(s: &crate::usage::CopilotSnapshot, now: DateTime<Utc>) -> SectionBuilder {
     let pct = s.premium_pct;
+    let at_limit = !s.unlimited && !s.overage_permitted && pct >= 100;
     let count = |value: f64| {
         if (value - value.round()).abs() < 0.05 {
             format!("{:.0}", value.round())
@@ -1042,7 +1043,11 @@ fn copilot_sections(s: &crate::usage::CopilotSnapshot, now: DateTime<Utc>) -> Se
                 label: "Premium requests".into(),
                 pct: pct.clamp(0, 100) as u16,
                 severity: severity_for(pct),
-                value_label: format!("{pct}%"),
+                value_label: if at_limit {
+                    "At limit".into()
+                } else {
+                    format!("{pct}%")
+                },
                 footnote: format!("{} of {}", count(s.used), count(s.entitlement)),
             },
             s.reset_at,
@@ -1058,6 +1063,12 @@ fn copilot_sections(s: &crate::usage::CopilotSnapshot, now: DateTime<Utc>) -> Se
         v.push(Section::Text {
             label: "Billed over plan".into(),
             value: count(s.overage_count),
+        });
+    } else if at_limit {
+        v.push(Section::Spacer);
+        v.push(Section::Text {
+            label: "Limit".into(),
+            value: "Premium requests paused until reset".into(),
         });
     }
     v
@@ -2070,5 +2081,31 @@ mod tests {
             http,
             Some(("HTTP 503".into(), "service unavailable".into()))
         );
+    }
+
+    #[test]
+    fn copilot_at_the_limit_says_so_instead_of_a_percentage() {
+        let snap = crate::usage::CopilotSnapshot {
+            plan: "Copilot Pro".into(),
+            account: "octocat".into(),
+            premium_pct: 100,
+            entitlement: 200.0,
+            used: 203.0,
+            remaining: 0.0,
+            unlimited: false,
+            overage_count: 0.0,
+            overage_permitted: false,
+            reset_at: Some(now() + chrono::Duration::days(3)),
+        };
+        let sections = sections_for(&ready(VendorSnapshot::Copilot(snap)), now(), 5);
+        assert!(sections.iter().any(|section| matches!(
+            section,
+            Section::Metric { value_label, pct, .. } if value_label == "At limit" && *pct == 100
+        )));
+        assert!(sections.iter().any(|section| matches!(
+            section,
+            Section::Text { label, value }
+                if label == "Limit" && value == "Premium requests paused until reset"
+        )));
     }
 }
